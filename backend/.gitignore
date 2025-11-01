@@ -1,0 +1,28 @@
+# Dépendances
+node_modules/
+package-lock.json
+
+# Fichiers téléchargés
+downloads/
+*.mp3
+*.m4a
+*.webm
+*.mp4
+
+# Logs
+*.log
+npm-debug.log*
+
+# Configuration locale
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
