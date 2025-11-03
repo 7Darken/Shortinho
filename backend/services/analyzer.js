@@ -169,26 +169,60 @@ export async function transcribeAudio(audioFilePath) {
 /**
  * Analyse une transcription de recette avec GPT
  * @param {string} transcription - Transcription textuelle de la vidéo
+ * @param {string} tiktokDescription - Description TikTok (optionnelle)
  * @returns {Promise<Object>} Recette structurée avec ingrédients, étapes, macros, etc.
  */
-export async function analyzeRecipe(transcription) {
+export async function analyzeRecipe(transcription, tiktokDescription = null) {
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   
   if (!OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY non définie dans .env');
   }
   
-  const prompt = `Tu es un expert en analyse de recettes culinaires. Analyse cette transcription de recette de cuisine et extrait toutes les informations disponibles de manière structurée.
+  // Construire le prompt avec transcription et description TikTok si disponible
+  let contentToAnalyze = `TRANSCRIPTION AUDIO :
+${transcription}`;
 
-TRANSCRIPTION :
-${transcription}
+  if (tiktokDescription && tiktokDescription.trim().length > 0) {
+    contentToAnalyze += `
+
+DESCRIPTION TIKTOK :
+${tiktokDescription}`;
+  }
+  const EQUIPMENT_LIST = [
+    "four",
+    "micro-ondes",
+    "air fryer",
+    "mixeur",
+    "poêle",
+  ];
+
+  const prompt = `Tu es un expert en analyse de recettes culinaires. Analyse cette recette de cuisine et extrait toutes les informations disponibles de manière structurée.
+
+${contentToAnalyze}
 
 EXTRACTIONS DEMANDÉES :
 1. **Informations de base** : Titre, nombre de portions, temps (préparation, cuisson, total)
 2. **Ingrédients** : Liste complète avec quantités exactes mentionnées (ou estimations visuelles si possible)
 3. **Étapes** : Instructions claires, concises, dans l'ordre chronologique
+4. **Équipements utilisés** : à partir de la liste suivante uniquement (${EQUIPMENT_LIST.join(", ")})
+  — Si un équipement n’est pas mentionné ou implicite, ne l’ajoute pas du tout.
+5. **Valeurs nutritionnelles estimées (pour toute la recette)** :
+   - calories (en kcal)
+   - protéines (en g)
+   - glucides (en g)
+   - lipides (en g)
+**Méthode de calcul nutritionnel :**
+- Estime les valeurs à partir des ingrédients et leurs quantités (pas au hasard). 
+- Additionne les valeurs pour obtenir les totaux
+- Propose une estimation raisonnable même si certains ingrédients ont des quantités approximatives
 
 IMPORTANT :
+- PRIORISER les informations de la transcription audio
+- La description TikTok peut contenir des informations supplémentaires utiles (titres, ingrédients, astuces, etc.)
+- ÉVALUE D'ABORD si la description TikTok aide à créer une meilleure recette
+- Si la description TikTok est pertinente et ajoute de la valeur, INTÈGRE ces informations
+- Si la description TikTok n'est pas pertinente (musique, trends, etc.), IGNORE-la complètement
 - Format JSON strict, sans texte avant ou après
 - Structure claire et lisible
 - Quantités en unités standard (g, ml, c.à.s, etc.)
@@ -215,7 +249,14 @@ Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
       "duration": "10 min",
       "temperature": "180°C"
     }
-  ]
+  ],
+  "equipment": ["four", "mixeur"],
+  "nutrition": {
+    "calories": 1200,
+    "proteins": 45,
+    "carbs": 130,
+    "fats": 60
+  }
 }`;
 
   try {
@@ -283,5 +324,48 @@ export async function cleanupFile(filePath) {
   } catch (error) {
     console.error('⚠️  Erreur lors du nettoyage:', error.message);
   }
+}
+
+/**
+ * Récupère les métadonnées TikTok via l'API oEmbed
+ * @param {string} tiktokUrl - URL de la vidéo TikTok
+ * @returns {Promise<Object | null>} - Métadonnées TikTok ou null
+ */
+export async function fetchTikTokMeta(tiktokUrl) {
+  try {
+    console.log('🔍 [TikTok] Récupération métadonnées via oEmbed...');
+    const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(tiktokUrl)}`;
+    
+    const response = await fetch(oembedUrl);
+    
+    if (!response.ok) {
+      console.warn('⚠️  [TikTok] Impossible de récupérer les métadonnées:', response.status);
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    return {
+      title: data.title || '',
+      author: data.author_name || '',
+      authorUrl: data.author_url || '',
+      thumbnailUrl: data.thumbnail_url || '',
+    };
+  } catch (error) {
+    console.error('❌ [TikTok] Erreur lors de la récupération:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Nettoie la description TikTok (supprime hashtags, espaces multiples)
+ * @param {string} rawText - Texte brut de la description
+ * @returns {string} - Texte nettoyé
+ */
+export function cleanDescription(rawText) {
+  return rawText
+    .replace(/\s+/g, ' ') // supprimer les multiples espaces
+    .replace(/#\w+/g, '') // supprimer les hashtags
+    .trim();
 }
 

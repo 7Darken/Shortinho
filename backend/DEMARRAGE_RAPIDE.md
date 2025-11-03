@@ -108,8 +108,17 @@ Vérifie que l'API est opérationnelle.
 
 ```env
 OPENAI_API_KEY=sk-proj-votre_cle_openai_ici
+SUPABASE_URL=https://votre-projet.supabase.co
+SUPABASE_JWT_SECRET=votre_jwt_secret_ici
+SUPABASE_SERVICE_KEY=votre_service_key_ici
 PORT=3000  # Optionnel, par défaut 3000
 ```
+
+**Où trouver ces clés Supabase:**
+- `SUPABASE_URL`: URL de votre projet (Settings > API)
+- `SUPABASE_JWT_SECRET`: Clé secrète JWT (Settings > API > JWT Secret)
+- `SUPABASE_SERVICE_KEY`: Clé service (Settings > API > Service Role Key)
+  - ⚠️ **Important**: Cette clé bypasse le RLS, gardez-la secrète!
 
 ### Configuration React Native
 

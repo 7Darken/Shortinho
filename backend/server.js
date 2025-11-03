@@ -16,7 +16,11 @@ import {
   transcribeAudio,
   analyzeRecipe,
   cleanupFile,
+  fetchTikTokMeta,
+  cleanDescription,
 } from './services/analyzer.js';
+import { authenticateToken } from './middlewares/auth.js';
+import { saveRecipeToDatabase, deleteUserAccount, getRecipeFromDatabase } from './services/database.js';
 
 // Charger les variables d'environnement
 dotenv.config();
@@ -41,10 +45,15 @@ if (!fs.existsSync(AUDIO_DIR)) {
 /**
  * Endpoint principal pour analyser une recette TikTok
  * POST /analyze
+ * Headers: { "Authorization": "Bearer JWT_TOKEN" }
  * Body: { "url": "https://www.tiktok.com/..." }
  */
-app.post('/analyze', async (req, res) => {
+app.post('/analyze', authenticateToken, async (req, res) => {
   const tiktokUrl = req.body.url;
+  
+  // Log de l'utilisateur qui fait la requête
+  console.log('👤 [User]', req.user.email || req.user.id);
+  
   
   if (!tiktokUrl || typeof tiktokUrl !== 'string') {
     return res.status(400).json({
@@ -59,32 +68,64 @@ app.post('/analyze', async (req, res) => {
   let audioPath = null;
 
   try {
+    // Étape 0: Récupérer les métadonnées TikTok
+    console.log('\n🔍 ÉTAPE 0/5: Récupération métadonnées TikTok...');
+    const tiktokMeta = await fetchTikTokMeta(tiktokUrl);
+    let tiktokDescription = null;
+    if (tiktokMeta && tiktokMeta.title) {
+      tiktokDescription = cleanDescription(tiktokMeta.title);
+      console.log('✅ Description TikTok:', tiktokDescription.substring(0, 100));
+    } else {
+      console.log('⚠️  Pas de métadonnées TikTok disponibles');
+    }
+
     // Étape 1: Extraire l'audio
-    console.log('\n📦 ÉTAPE 1/3: Extraction audio...');
+    console.log('\n📦 ÉTAPE 1/5: Extraction audio...');
     audioPath = await extractTikTokAudio(tiktokUrl, AUDIO_DIR);
     console.log('✅ Audio extrait:', path.basename(audioPath));
 
     // Étape 2: Transcrire avec Whisper
-    console.log('\n🎤 ÉTAPE 2/3: Transcription Whisper...');
+    console.log('\n🎤 ÉTAPE 2/5: Transcription Whisper...');
     const transcription = await transcribeAudio(audioPath);
     console.log('✅ Transcription réussie, longueur:', transcription.length, 'caractères');
 
-    // Étape 3: Analyser avec GPT
-    console.log('\n🤖 ÉTAPE 3/3: Analyse GPT...');
-    const recipe = await analyzeRecipe(transcription);
+    // Étape 3: Analyser avec GPT (avec transcription ET description si disponible)
+    console.log('\n🤖 ÉTAPE 3/5: Analyse GPT...');
+    const recipe = await analyzeRecipe(transcription, tiktokDescription);
     console.log('✅ Analyse réussie:', recipe.title);
+
+    // Étape 4: Sauvegarder dans Supabase
+    console.log('\n💾 ÉTAPE 4/5: Sauvegarde dans Supabase...');
+    const savedRecipe = await saveRecipeToDatabase({
+      userId: req.user.id,
+      title: recipe.title,
+      servings: recipe.servings,
+      prepTime: recipe.prep_time,
+      cookTime: recipe.cook_time,
+      totalTime: recipe.total_time,
+      sourceUrl: tiktokUrl,
+      ingredients: recipe.ingredients,
+      steps: recipe.steps,
+      equipment: recipe.equipment,
+      nutrition: recipe.nutrition,
+    });
+    console.log('✅ Sauvegarde réussie!');
 
     // Nettoyer le fichier audio temporaire
     if (audioPath) {
       await cleanupFile(audioPath);
     }
 
-    // Retourner la recette
+    // Retourner la recette avec l'ID de la base de données
     console.log('\n🎉 Analyse terminée avec succès!\n');
+    
+    // Récupérer la recette complète avec ingrédients et étapes depuis la base
+    const fullRecipe = await getRecipeFromDatabase(savedRecipe.id);
     
     res.status(200).json({
       success: true,
-      recipe: recipe,
+      recipe: fullRecipe,
+      user_id: req.user.id,
     });
 
   } catch (error) {
@@ -99,6 +140,37 @@ app.post('/analyze', async (req, res) => {
       success: false,
       error: error.message,
       message: 'Une erreur est survenue lors de l\'analyse de la recette',
+    });
+  }
+});
+
+/**
+ * Endpoint pour supprimer le compte utilisateur
+ * DELETE /account
+ * Headers: { "Authorization": "Bearer JWT_TOKEN" }
+ */
+app.delete('/account', authenticateToken, async (req, res) => {
+  console.log('🗑️  Demande de suppression de compte');
+  console.log('👤 [User]', req.user.email || req.user.id);
+
+  try {
+    const success = await deleteUserAccount(req.user.id);
+
+    if (success) {
+      console.log('✅ Compte supprimé avec succès');
+      res.status(200).json({
+        success: true,
+        message: 'Compte supprimé avec succès',
+      });
+    } else {
+      throw new Error('Échec de la suppression du compte');
+    }
+  } catch (error) {
+    console.error('❌ Erreur lors de la suppression du compte:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Une erreur est survenue lors de la suppression du compte',
     });
   }
 });
@@ -124,8 +196,9 @@ app.listen(PORT, () => {
   console.log('╚════════════════════════════════════════╝');
   console.log(`\n🚀 Serveur démarré sur http://localhost:${PORT}`);
   console.log('📡 Endpoints disponibles:');
-  console.log('   POST /analyze - Analyser une recette TikTok');
-  console.log('   GET  /health  - Vérifier l\'état de l\'API');
+  console.log('   POST   /analyze  - Analyser une recette TikTok (🔒 Protégé)');
+  console.log('   DELETE /account  - Supprimer le compte utilisateur (🔒 Protégé)');
+  console.log('   GET    /health   - Vérifier l\'état de l\'API');
   console.log('\n✅ Prêt à recevoir des requêtes!\n');
 });
 
