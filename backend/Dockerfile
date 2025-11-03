@@ -24,8 +24,7 @@ COPY package*.json ./
 RUN npm install --production --no-audit --no-fund
 
 # Copier le reste du code
-COPY server.js ./
-COPY services ./services
+COPY . .
 
 # Exposer le port
 EXPOSE 3000
