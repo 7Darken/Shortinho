@@ -26,7 +26,7 @@ RUN npm install --production --no-audit --no-fund
 # Copier le reste du code
 COPY . .
 
-# Exposer le port
+# Exposer le port (utiliser la variable d'environnement PORT si disponible)
 EXPOSE 3000
 
 # Variable d'environnement par défaut
@@ -34,5 +34,6 @@ ENV NODE_ENV=production
 ENV PORT=3000
 
 # Commande de démarrage
-CMD ["npm", "start"]
+# Utiliser node directement pour éviter le wrapper npm
+CMD ["node", "server.js"]
 
