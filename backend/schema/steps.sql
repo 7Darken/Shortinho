@@ -5,7 +5,8 @@ create table if not exists public.steps (
   "order" integer not null,
   text text not null,
   duration text,
-  temperature text
+  temperature text,
+  ingredients_used text[] DEFAULT '{}'
 );
 
 alter table public.steps enable row level security;

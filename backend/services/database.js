@@ -169,6 +169,7 @@ async function getTikTokThumbnail(tiktokUrl) {
  * @param {Array} recipeData.steps - Liste des étapes
  * @param {Array} recipeData.equipment - Liste des équipements
  * @param {Object} recipeData.nutrition - Valeurs nutritionnelles
+ * @param {string} recipeData.generationMode - Mode de génération ('free' ou 'premium')
  * @returns {Promise<Object>} - Recette créée avec son ID
  */
 export async function saveRecipeToDatabase(recipeData) {
@@ -185,6 +186,7 @@ export async function saveRecipeToDatabase(recipeData) {
       sourceUrl,
       equipment,
       nutrition,
+      generationMode,
     } = recipeData;
 
     // 1. Récupérer le thumbnail de la vidéo TikTok
@@ -192,6 +194,7 @@ export async function saveRecipeToDatabase(recipeData) {
 
     // 2. Insérer la recette
     console.log('📝 [Database] Création de la recette...');
+    console.log('🎯 [Database] Mode de génération:', generationMode || 'free');
     if (equipment && equipment.length > 0) {
       console.log('🔧 [Database] Équipements:', equipment.join(', '));
     }
@@ -219,6 +222,7 @@ export async function saveRecipeToDatabase(recipeData) {
         proteins: nutrition?.proteins || null,
         carbs: nutrition?.carbs || null,
         fats: nutrition?.fats || null,
+        generation_mode: generationMode || 'free',
       })
       .select()
       .single();
@@ -268,6 +272,9 @@ export async function saveRecipeToDatabase(recipeData) {
         text: step.text,
         duration: step.duration || null,
         temperature: step.temperature || null,
+        ingredients_used: step.ingredients_used && Array.isArray(step.ingredients_used) 
+          ? step.ingredients_used 
+          : [],
       }));
 
       const { error: stepsError } = await supabase
@@ -338,6 +345,42 @@ export async function getRecipeFromDatabase(recipeId) {
 }
 
 /**
+ * Vérifie si une recette existe déjà pour cet utilisateur avec cette URL source
+ * @param {string} userId - ID de l'utilisateur
+ * @param {string} sourceUrl - URL source (TikTok)
+ * @returns {Promise<Object | null>} - Recette existante ou null
+ */
+export async function getExistingRecipeByUrl(userId, sourceUrl) {
+  try {
+    // Normaliser l'URL (enlever les query params qui peuvent varier)
+    const normalizedUrl = sourceUrl.split('?')[0]; // Garder seulement l'URL de base
+    
+    const { data: recipes, error } = await supabase
+      .from('recipes')
+      .select('id, title, created_at')
+      .eq('user_id', userId)
+      .like('source_url', `${normalizedUrl}%`) // Match avec LIKE pour gérer les variations
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error('❌ [Database] Erreur lors de la vérification de recette existante:', error);
+      return null;
+    }
+
+    if (recipes && recipes.length > 0) {
+      console.log('✅ [Database] Recette existante trouvée:', recipes[0].id);
+      return recipes[0];
+    }
+
+    return null;
+  } catch (error) {
+    console.error('❌ [Database] Erreur lors de la vérification:', error);
+    return null;
+  }
+}
+
+/**
  * Récupère toutes les recettes d'un utilisateur
  * @param {string} userId - ID de l'utilisateur
  * @returns {Promise<Array>} - Liste des recettes
@@ -362,6 +405,109 @@ export async function getUserRecipes(userId) {
   } catch (error) {
     console.error('❌ [Database] Erreur lors de la récupération:', error);
     throw error;
+  }
+}
+
+/**
+ * Vérifie si l'utilisateur peut générer une recette (Premium ou générations gratuites restantes)
+ * @param {string} userId - ID de l'utilisateur
+ * @returns {Promise<{ canGenerate: boolean, isPremium: boolean, freeGenerationsRemaining: number }>}
+ */
+export async function checkUserCanGenerateRecipe(userId) {
+  console.log('🔍 [Database] Vérification des droits de génération pour:', userId);
+
+  try {
+    // Récupérer le profil de l'utilisateur
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('is_premium, free_generations_remaining')
+      .eq('id', userId)
+      .single();
+
+    if (error) {
+      console.error('❌ [Database] Erreur lors de la récupération du profil:', error);
+      throw new Error(`Erreur lors de la récupération du profil: ${error.message}`);
+    }
+
+    if (!profile) {
+      console.error('❌ [Database] Profil introuvable pour:', userId);
+      throw new Error('Profil utilisateur introuvable');
+    }
+
+    const isPremium = profile.is_premium === true;
+    const freeGenerationsRemaining = profile.free_generations_remaining || 0;
+
+    console.log('💎 [Database] isPremium:', isPremium);
+    console.log('📊 [Database] free_generations_remaining:', freeGenerationsRemaining);
+
+    // L'utilisateur peut générer s'il est premium OU s'il a des générations gratuites
+    const canGenerate = isPremium || freeGenerationsRemaining > 0;
+
+    console.log(canGenerate ? '✅ [Database] Génération autorisée' : '⛔ [Database] Génération refusée - Limite atteinte');
+
+    return {
+      canGenerate,
+      isPremium,
+      freeGenerationsRemaining,
+    };
+  } catch (error) {
+    console.error('❌ [Database] Erreur lors de la vérification:', error);
+    throw error;
+  }
+}
+
+/**
+ * Décrémente le compteur de générations gratuites d'un utilisateur non-premium
+ * Version simplifiée : SELECT puis UPDATE (on utilise la Service Role Key)
+ * @param {string} userId - ID de l'utilisateur
+ * @returns {Promise<void>}
+ */
+export async function decrementFreeGenerations(userId) {
+  console.log('📉 [Database] Décrémentation des générations gratuites pour:', userId);
+
+  try {
+    // 1. Récupérer la valeur actuelle
+    const { data: profile, error: selectError } = await supabase
+      .from('profiles')
+      .select('free_generations_remaining, is_premium')
+      .eq('id', userId)
+      .single();
+
+    if (selectError) {
+      throw new Error(`Erreur lors de la récupération: ${selectError.message}`);
+    }
+
+    // 2. Vérifier si on doit décrémenter
+    if (profile.is_premium) {
+      console.log('💎 [Database] Utilisateur premium - Pas de décrémentation nécessaire');
+      return;
+    }
+
+    if (profile.free_generations_remaining <= 0) {
+      console.log('⚠️  [Database] Aucune génération restante - Pas de décrémentation');
+      return;
+    }
+
+    // 3. Décrémenter (sans updated_at car cette colonne n'existe pas dans profiles)
+    const newValue = Math.max(profile.free_generations_remaining - 1, 0);
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({
+        free_generations_remaining: newValue,
+      })
+      .eq('id', userId);
+
+    if (updateError) {
+      console.error('❌ [Database] Erreur UPDATE:', updateError);
+      throw new Error(`Erreur lors de la mise à jour: ${updateError.message}`);
+    }
+
+    console.log(`✅ [Database] Décrémentation réussie: ${profile.free_generations_remaining} → ${newValue}`);
+  } catch (error) {
+    console.error('❌ [Database] Erreur lors de la décrémentation:', error);
+    // Ne pas throw ici pour ne pas bloquer l'analyse
+    // Mais logger clairement pour debug
+    console.warn('⚠️  [Database] La décrémentation a échoué mais l\'analyse continue');
   }
 }
 

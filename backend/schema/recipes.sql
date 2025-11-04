@@ -2,6 +2,7 @@
 create table if not exists public.recipes (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users(id) on delete cascade,
+  generation_mode text DEFAULT 'free',
   folder_id uuid references public.folders(id) on delete set null,
   title text not null,
   servings integer,

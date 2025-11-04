@@ -200,11 +200,17 @@ ${tiktokDescription}`;
   const prompt = `Tu es un expert en analyse de recettes culinaires. Analyse cette recette de cuisine et extrait toutes les informations disponibles de manière structurée.
 
 ${contentToAnalyze}
-
+ Si le lien ou la description **n’a rien à voir avec une recette**, renvoie uniquement :
+{
+  "error": "NOT_RECIPE",
+  "message": "Ce lien TikTok ne contient pas de recette ou n'est pas une vidéo culinaire."
+}
 EXTRACTIONS DEMANDÉES :
 1. **Informations de base** : Titre, nombre de portions, temps (préparation, cuisson, total)
 2. **Ingrédients** : Liste complète avec quantités exactes mentionnées (ou estimations visuelles si possible)
 3. **Étapes** : Instructions claires, concises, dans l'ordre chronologique
+  - Pour chaque étape, inclure **un tableau ingredients_used** qui contient les noms exacts des ingrédients utilisés dans cette étape, correspondant aux noms listés dans la section ingrédients.
+
 4. **Équipements utilisés** : à partir de la liste suivante uniquement (${EQUIPMENT_LIST.join(", ")})
   — Si un équipement n’est pas mentionné ou implicite, ne l’ajoute pas du tout.
 5. **Valeurs nutritionnelles estimées (pour toute la recette)** :
@@ -247,7 +253,9 @@ Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
       "order": 1,
       "text": "Instruction claire et concise",
       "duration": "10 min",
-      "temperature": "180°C"
+      "temperature": "180°C",
+      "ingredients_used": ["beurre", "sucre"]
+
     }
   ],
   "equipment": ["four", "mixeur"],
@@ -290,6 +298,7 @@ Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
     
     const result = await response.json();
     const content = result.choices[0]?.message?.content;
+    console.log(content);
     
     if (!content) {
       console.error('❌ Pas de contenu dans la réponse GPT:', JSON.stringify(result, null, 2));
@@ -299,8 +308,28 @@ Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
     // Parser le JSON
     try {
       const recipe = JSON.parse(content);
+      
+      // Vérifier si GPT a détecté que ce n'est pas une recette
+      if (recipe.error === 'NOT_RECIPE') {
+        console.warn('⚠️ [GPT] Le contenu TikTok n\'est pas une recette culinaire');
+        console.log('📝 [GPT] Message:', recipe.message);
+        
+        // Créer une erreur spécifique pour ce cas
+        const notRecipeError = new Error(recipe.message || 'Ce lien TikTok ne contient pas de recette ou n\'est pas une vidéo culinaire.');
+        notRecipeError.code = 'NOT_RECIPE';
+        notRecipeError.userMessage = recipe.message;
+        throw notRecipeError;
+      }
+      
+      // Si c'est une vraie recette, la retourner
       return recipe;
     } catch (parseError) {
+      // Si c'est notre erreur NOT_RECIPE, la relancer telle quelle
+      if (parseError.code === 'NOT_RECIPE') {
+        throw parseError;
+      }
+      
+      // Sinon, c'est une erreur de parsing JSON
       console.error('❌ Erreur de parsing JSON:', parseError.message);
       console.error('📄 Contenu reçu:', content.substring(0, 500));
       throw new Error('Réponse JSON invalide de GPT');
