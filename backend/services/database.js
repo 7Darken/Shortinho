@@ -4,6 +4,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 
@@ -128,29 +129,93 @@ async function findMatchingFoodItem(rawName) {
  * @returns {Promise<string | null>} - URL du thumbnail ou null
  */
 async function getTikTokThumbnail(tiktokUrl) {
+  if (!tiktokUrl || typeof tiktokUrl !== 'string') {
+    console.warn('⚠️  [Database] URL TikTok invalide pour la récupération du thumbnail');
+    return null;
+  }
+
+  console.log('🖼️  [Database] Récupération du thumbnail TikTok via oEmbed...');
+
   try {
-    console.log('🖼️  [Database] Récupération du thumbnail TikTok...');
     const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(tiktokUrl)}`;
-    
-    const oembedRes = await fetch(oembedUrl);
-    
+    const oembedRes = await fetch(oembedUrl, { timeout: 10_000 });
+
     if (!oembedRes.ok) {
-      console.warn('⚠️  [Database] Impossible de récupérer le thumbnail:', oembedRes.status);
+      console.warn('⚠️  [Database] Échec de l’oEmbed TikTok:', oembedRes.status, oembedRes.statusText);
       return null;
     }
-    
+
     const oembedJson = await oembedRes.json();
-    const thumbnailUrl = oembedJson.thumbnail_url;
-    
-    if (thumbnailUrl) {
-      console.log('✅ [Database] Thumbnail récupéré:', thumbnailUrl);
-      return thumbnailUrl;
+    const thumbnailUrl = oembedJson?.thumbnail_url;
+
+    if (!thumbnailUrl) {
+      console.warn('⚠️  [Database] Pas de thumbnail disponible dans la réponse oEmbed');
+      return null;
     }
-    
-    console.warn('⚠️  [Database] Pas de thumbnail dans la réponse oEmbed');
-    return null;
+
+    console.log('⬇️  [Database] Téléchargement du thumbnail TikTok...');
+    const imageResponse = await fetch(thumbnailUrl, { timeout: 10_000 });
+
+    if (!imageResponse.ok) {
+      console.warn('⚠️  [Database] Téléchargement du thumbnail échoué:', imageResponse.status, imageResponse.statusText);
+      return null;
+    }
+
+    const contentType = imageResponse.headers.get('content-type') || 'image/jpeg';
+    if (!contentType.startsWith('image/')) {
+      console.warn('⚠️  [Database] Réponse oEmbed inattendue (content-type):', contentType);
+      return null;
+    }
+
+    const arrayBuffer = await imageResponse.arrayBuffer();
+    const imageBuffer = Buffer.from(arrayBuffer);
+
+    if (!imageBuffer.length) {
+      console.warn('⚠️  [Database] Le fichier thumbnail téléchargé est vide');
+      return null;
+    }
+
+    const extension = (() => {
+      const mimeSubtype = contentType.split('/')[1]?.toLowerCase();
+      if (!mimeSubtype) return 'jpg';
+      if (mimeSubtype === 'jpeg') return 'jpg';
+      return mimeSubtype;
+    })();
+
+    const fileName = `tiktok-${Date.now()}-${randomUUID()}.${extension}`;
+    const storagePath = `tiktok/${fileName}`;
+
+    console.log('☁️  [Database] Upload du thumbnail vers Supabase Storage...', storagePath);
+    const { data: uploadData, error: uploadError } = await supabase
+      .storage
+      .from('recipe-thumbnails')
+      .upload(storagePath, imageBuffer, {
+        contentType,
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error('❌ [Database] Échec de l’upload du thumbnail:', uploadError.message);
+      return null;
+    }
+
+    const { data: publicUrlData } = supabase
+      .storage
+      .from('recipe-thumbnails')
+      .getPublicUrl(uploadData?.path || storagePath);
+
+    const publicUrl = publicUrlData?.publicUrl;
+
+    if (!publicUrl) {
+      console.warn('⚠️  [Database] Impossible de récupérer l’URL publique du thumbnail');
+      return null;
+    }
+
+    console.log('✅ [Database] Thumbnail stocké et accessible:', publicUrl);
+    return publicUrl;
   } catch (error) {
-    console.error('⚠️  [Database] Erreur lors de la récupération du thumbnail:', error.message);
+    console.error('❌ [Database] Erreur lors du traitement du thumbnail TikTok:', error.message);
     return null;
   }
 }
