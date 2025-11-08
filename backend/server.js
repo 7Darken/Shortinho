@@ -173,6 +173,7 @@ app.post('/analyze', authenticateToken, async (req, res) => {
 
     const recipe = analysisResult.recipe;
     const platform = analysisResult.platform; // TikTok, YouTube, Instagram
+    const metadata = analysisResult.metadata; // Métadonnées (titre, auteur, thumbnail)
 
     // Sauvegarder dans Supabase
     console.log('\n💾 SAUVEGARDE: Enregistrement dans Supabase...');
@@ -185,6 +186,7 @@ app.post('/analyze', authenticateToken, async (req, res) => {
       totalTime: recipe.total_time,
       sourceUrl: tiktokUrl,
       platform: platform, // Plateforme source (TikTok, YouTube, Instagram)
+      thumbnailUrl: metadata?.thumbnailUrl, // URL du thumbnail depuis fetchMetadata()
       ingredients: recipe.ingredients,
       steps: recipe.steps,
       equipment: recipe.equipment,

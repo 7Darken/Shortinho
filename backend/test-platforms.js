@@ -18,17 +18,17 @@ const testUrls = [
   { url: 'https://tiktok.com/@chef/video/9876543210', expected: 'TikTok' },
   { url: 'https://vm.tiktok.com/ZMabcdef/', expected: 'TikTok' },
 
-  // YouTube Shorts
+  // YouTube Shorts (UNIQUEMENT les Shorts, pas les vidéos normales)
   { url: 'https://www.youtube.com/shorts/dQw4w9WgXcQ', expected: 'YouTube' },
   { url: 'https://youtube.com/shorts/abc123', expected: 'YouTube' },
-  { url: 'https://youtu.be/dQw4w9WgXcQ', expected: 'YouTube' },
-  { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', expected: 'YouTube' },
 
-  // Instagram (pas encore implémenté complètement)
+  // Instagram
   { url: 'https://www.instagram.com/reel/ABC123/', expected: 'Instagram' },
   { url: 'https://instagram.com/p/DEF456/', expected: 'Instagram' },
 
-  // URLs non supportées
+  // URLs non supportées (y compris vidéos YouTube normales)
+  { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', expected: null },
+  { url: 'https://youtu.be/dQw4w9WgXcQ', expected: null },
   { url: 'https://facebook.com/watch/123', expected: null },
   { url: 'https://twitter.com/user/status/123', expected: null },
 ];

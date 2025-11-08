@@ -239,3 +239,23 @@ npm run test:analyze <URL>
 ```
 
 Vérifie que le workflow complet fonctionne de bout en bout.
+
+### Test de Métadonnées Instagram
+
+```bash
+npm run test:instagram <URL_INSTAGRAM_REEL>
+```
+
+Teste uniquement la récupération des métadonnées Instagram (scraping HTML, Open Graph tags).
+
+**Exemple:**
+```bash
+npm run test:instagram https://www.instagram.com/reel/ABC123/
+```
+
+**Ce que le test affiche:**
+- 📝 Titre (og:title ou og:description)
+- 👤 Auteur
+- 🔗 URL de l'auteur
+- 🖼️ URL du thumbnail (og:image)
+- 📄 JSON complet des métadonnées

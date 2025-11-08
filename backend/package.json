@@ -9,7 +9,8 @@
     "dev": "node --watch server.js",
     "cli": "node index.js",
     "test:platforms": "node test-platforms.js",
-    "test:analyze": "node test-analyze.js"
+    "test:analyze": "node test-analyze.js",
+    "test:instagram": "node test-instagram-metadata.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.78.0",
@@ -18,7 +19,8 @@
     "express": "^4.18.2",
     "form-data": "^4.0.0",
     "jsonwebtoken": "^9.0.2",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "node-html-parser": "^7.0.1"
   },
   "engines": {
     "node": ">=18.0.0"

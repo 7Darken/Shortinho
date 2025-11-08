@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import fetch from 'node-fetch';
+import { parse } from 'node-html-parser';
 
 export class InstagramPlatform extends Platform {
   name = 'Instagram';
@@ -138,45 +139,72 @@ export class InstagramPlatform extends Platform {
   }
 
   /**
-   * Récupère les métadonnées Instagram via l'API oEmbed
+   * Récupère les métadonnées Instagram en scrapant le HTML (Open Graph tags)
    * @param {string} url - URL de la vidéo Instagram
    * @returns {Promise<Object|null>} Métadonnées Instagram ou null
    */
   async fetchMetadata(url) {
     try {
-      console.log(`🔍 [${this.name}] Récupération métadonnées via oEmbed...`);
+      console.log(`🔍 [${this.name}] Scraping du <head> Instagram pour métadonnées...`);
 
-      // Instagram oEmbed API
-      // Documentation: https://developers.facebook.com/docs/instagram/oembed
-      const oembedUrl = `https://graph.facebook.com/v12.0/instagram_oembed?url=${encodeURIComponent(url)}&access_token=&omitscript=true`;
+      // Headers pour imiter un navigateur réel et obtenir le HTML complet
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0',
+      };
 
-      // Note: Instagram oEmbed ne nécessite pas toujours un access_token pour les contenus publics
-      // On peut aussi essayer l'ancienne API
-      const fallbackOembedUrl = `https://api.instagram.com/oembed/?url=${encodeURIComponent(url)}`;
+      const response = await fetch(url, { headers });
 
-      let response = await fetch(fallbackOembedUrl);
-
-      // Si l'ancienne API ne fonctionne pas, essayer avec la nouvelle (peut nécessiter un token)
       if (!response.ok) {
-        console.log(`⚠️  [${this.name}] Tentative avec l'API principale...`);
-        response = await fetch(oembedUrl);
-      }
-
-      if (!response.ok) {
-        console.warn(`⚠️  [${this.name}] Impossible de récupérer les métadonnées:`, response.status);
+        console.warn(`⚠️  [${this.name}] Échec de récupération HTML:`, response.status);
         return null;
       }
 
-      const data = await response.json();
+      const html = await response.text();
+      console.log(`📄 [${this.name}] HTML récupéré: ${html.length} caractères`);
+
+      // Parser le HTML
+      const root = parse(html);
+
+      // Extraire les balises Open Graph du <head>
+      const ogImage = root.querySelector('meta[property="og:image"]')?.getAttribute('content') || '';
+      const ogTitle = root.querySelector('meta[property="og:title"]')?.getAttribute('content') || '';
+      const ogDescription = root.querySelector('meta[property="og:description"]')?.getAttribute('content') || '';
+
+      // Utiliser og:title ou og:description comme titre
+      const title = ogTitle || ogDescription || '';
+
+      // Extraire l'auteur depuis l'URL
+      let author = '';
+      let authorUrl = '';
+
+      // Pour les reels: /username/reel/ID ou /reel/ID
+      // Pour les posts: /username/p/ID ou /p/ID
+      const usernameMatch = url.match(/instagram\.com\/([^\/\?]+)\/(reel|p|tv)\//);
+      if (usernameMatch && usernameMatch[1] !== 'reel' && usernameMatch[1] !== 'p' && usernameMatch[1] !== 'tv') {
+        author = usernameMatch[1];
+        authorUrl = `https://www.instagram.com/${author}/`;
+      }
 
       const metadata = {
-        title: data.title || '',
-        author: data.author_name || '',
-        authorUrl: data.author_url || '',
-        thumbnailUrl: data.thumbnail_url || '',
+        title: title,
+        author: author,
+        authorUrl: authorUrl,
+        thumbnailUrl: ogImage,
       };
 
-      console.log(`✅ [${this.name}] Métadonnées récupérées`);
+      console.log(`✅ [${this.name}] Métadonnées extraites du <head>`);
+      if (metadata.thumbnailUrl) {
+        console.log(`🖼️  [${this.name}] og:image:`, metadata.thumbnailUrl.substring(0, 80) + '...');
+      }
       if (metadata.title) {
         console.log(`📝 [${this.name}] Titre:`, metadata.title.substring(0, 100));
       }
@@ -186,7 +214,7 @@ export class InstagramPlatform extends Platform {
 
       return metadata;
     } catch (error) {
-      console.error(`❌ [${this.name}] Erreur lors de la récupération des métadonnées:`, error.message);
+      console.error(`❌ [${this.name}] Erreur lors du scraping des métadonnées:`, error.message);
       return null;
     }
   }

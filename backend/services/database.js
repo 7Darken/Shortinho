@@ -132,17 +132,102 @@ async function findMatchingFoodItem(rawName) {
 }
 
 /**
+ * Upload un thumbnail vers Supabase Storage
+ * @param {string} thumbnailUrl - URL du thumbnail à télécharger
+ * @param {string} platform - Plateforme source (TikTok, YouTube, Instagram)
+ * @returns {Promise<string | null>} - URL publique du thumbnail ou null
+ */
+async function uploadThumbnailToStorage(thumbnailUrl, platform = 'unknown') {
+  if (!thumbnailUrl || typeof thumbnailUrl !== 'string') {
+    console.warn('⚠️  [Database] URL de thumbnail invalide');
+    return null;
+  }
+
+  const platformFolder = platform.toLowerCase();
+  console.log(`🖼️  [Database] Téléchargement du thumbnail ${platform}...`);
+
+  try {
+    console.log('⬇️  [Database] Téléchargement du thumbnail...');
+    const imageResponse = await fetch(thumbnailUrl, { timeout: 10_000 });
+
+    if (!imageResponse.ok) {
+      console.warn('⚠️  [Database] Téléchargement du thumbnail échoué:', imageResponse.status, imageResponse.statusText);
+      return null;
+    }
+
+    const contentType = imageResponse.headers.get('content-type') || 'image/jpeg';
+    if (!contentType.startsWith('image/')) {
+      console.warn('⚠️  [Database] Réponse inattendue (content-type):', contentType);
+      return null;
+    }
+
+    const arrayBuffer = await imageResponse.arrayBuffer();
+    const imageBuffer = Buffer.from(arrayBuffer);
+
+    if (!imageBuffer.length) {
+      console.warn('⚠️  [Database] Le fichier thumbnail téléchargé est vide');
+      return null;
+    }
+
+    const extension = (() => {
+      const mimeSubtype = contentType.split('/')[1]?.toLowerCase();
+      if (!mimeSubtype) return 'jpg';
+      if (mimeSubtype === 'jpeg') return 'jpg';
+      return mimeSubtype;
+    })();
+
+    const fileName = `${platformFolder}-${Date.now()}-${randomUUID()}.${extension}`;
+    const storagePath = `${platformFolder}/${fileName}`;
+
+    console.log('☁️  [Database] Upload du thumbnail vers Supabase Storage...', storagePath);
+    const { data: uploadData, error: uploadError } = await supabase
+      .storage
+      .from('recipe-thumbnails')
+      .upload(storagePath, imageBuffer, {
+        contentType,
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error('❌ [Database] Échec de l\'upload du thumbnail:', uploadError.message);
+      return null;
+    }
+
+    const { data: publicUrlData } = supabase
+      .storage
+      .from('recipe-thumbnails')
+      .getPublicUrl(uploadData?.path || storagePath);
+
+    const publicUrl = publicUrlData?.publicUrl;
+
+    if (!publicUrl) {
+      console.warn('⚠️  [Database] Impossible de récupérer l\'URL publique du thumbnail');
+      return null;
+    }
+
+    console.log('✅ [Database] Thumbnail stocké et accessible:', publicUrl);
+    return publicUrl;
+  } catch (error) {
+    console.error(`❌ [Database] Erreur lors du traitement du thumbnail ${platform}:`, error.message);
+    return null;
+  }
+}
+
+/**
  * Récupère le thumbnail d'une vidéo TikTok via oEmbed
+ * @deprecated Utilisez uploadThumbnailToStorage avec metadata.thumbnailUrl
  * @param {string} tiktokUrl - URL de la vidéo TikTok
+ * @param {string} platform - Plateforme source (TikTok, YouTube, Instagram)
  * @returns {Promise<string | null>} - URL du thumbnail ou null
  */
-async function getTikTokThumbnail(tiktokUrl) {
+async function getTikTokThumbnail(tiktokUrl, platform = 'TikTok') {
   if (!tiktokUrl || typeof tiktokUrl !== 'string') {
     console.warn('⚠️  [Database] URL TikTok invalide pour la récupération du thumbnail');
     return null;
   }
 
-  console.log('🖼️  [Database] Récupération du thumbnail TikTok via oEmbed...');
+  console.log(`🖼️  [Database] Récupération du thumbnail ${platform} via oEmbed...`);
 
   try {
     const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(tiktokUrl)}`;
@@ -190,8 +275,9 @@ async function getTikTokThumbnail(tiktokUrl) {
       return mimeSubtype;
     })();
 
-    const fileName = `tiktok-${Date.now()}-${randomUUID()}.${extension}`;
-    const storagePath = `tiktok/${fileName}`;
+    const platformFolder = platform.toLowerCase();
+    const fileName = `${platformFolder}-${Date.now()}-${randomUUID()}.${extension}`;
+    const storagePath = `${platformFolder}/${fileName}`;
 
     console.log('☁️  [Database] Upload du thumbnail vers Supabase Storage...', storagePath);
     const { data: uploadData, error: uploadError } = await supabase
@@ -204,7 +290,7 @@ async function getTikTokThumbnail(tiktokUrl) {
       });
 
     if (uploadError) {
-      console.error('❌ [Database] Échec de l’upload du thumbnail:', uploadError.message);
+      console.error('❌ [Database] Échec de l\'upload du thumbnail:', uploadError.message);
       return null;
     }
 
@@ -216,7 +302,7 @@ async function getTikTokThumbnail(tiktokUrl) {
     const publicUrl = publicUrlData?.publicUrl;
 
     if (!publicUrl) {
-      console.warn('⚠️  [Database] Impossible de récupérer l’URL publique du thumbnail');
+      console.warn('⚠️  [Database] Impossible de récupérer l\'URL publique du thumbnail');
       return null;
     }
 
@@ -238,7 +324,8 @@ async function getTikTokThumbnail(tiktokUrl) {
  * @param {string} recipeData.cookTime - Temps de cuisson
  * @param {string} recipeData.totalTime - Temps total
  * @param {string} recipeData.sourceUrl - URL source
- * @param {string} recipeData.platform - Plateforme source (TikTok, YouTube, Instagram)
+ * @param {string} recipeData.platform - Plateforme source (TikTok, YouTube, Instagram) - utilisé pour organiser les thumbnails par dossier
+ * @param {string} recipeData.thumbnailUrl - URL du thumbnail depuis fetchMetadata() de la plateforme
  * @param {Array} recipeData.ingredients - Liste des ingrédients
  * @param {Array} recipeData.steps - Liste des étapes
  * @param {Array} recipeData.equipment - Liste des équipements
@@ -259,6 +346,7 @@ export async function saveRecipeToDatabase(recipeData) {
       totalTime,
       sourceUrl,
       platform,
+      thumbnailUrl,
       equipment,
       nutrition,
       generationMode,
@@ -276,8 +364,16 @@ export async function saveRecipeToDatabase(recipeData) {
       return filtered.length > 0 ? filtered : null;
     })();
 
-    // 1. Récupérer le thumbnail de la vidéo TikTok
-    const imageUrl = await getTikTokThumbnail(sourceUrl);
+    // 1. Uploader le thumbnail dans le bon dossier selon la plateforme
+    let imageUrl = null;
+    if (thumbnailUrl && platform) {
+      // Utiliser le thumbnail depuis fetchMetadata() et l'uploader
+      imageUrl = await uploadThumbnailToStorage(thumbnailUrl, platform);
+    } else if (sourceUrl) {
+      // Fallback pour compatibilité (ancienne méthode)
+      console.warn('⚠️  [Database] Utilisation de la méthode deprecated getTikTokThumbnail');
+      imageUrl = await getTikTokThumbnail(sourceUrl, platform || 'TikTok');
+    }
 
     // 2. Insérer la recette
     console.log('📝 [Database] Création de la recette...');

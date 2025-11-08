@@ -31,22 +31,19 @@ export const MEAL_TYPES = Object.freeze([
   'dîner',
   'collation',
   'dessert',
-  'boisson',
   'entrée',
   'autre',
 ]);
 
 export const DIET_TYPES = Object.freeze([
-  'omnivore',
   'végétarien',
   'sans gluten',
   'sans lactose',
-  'keto',
-  'low carb',
+  'vegan',
+  'sans viande',
   'protéiné',
   'faible en calories',
-  'régime anti-inflammatoire',
-  'riche en glucides',
+  'faible en glucides',
   'sans sucre',
   'autre',
 ]);

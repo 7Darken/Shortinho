@@ -13,14 +13,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. **Premium Check**: Verify user can generate recipe (free tier limit or premium subscription)
 3. **Duplicate Prevention**: Check if recipe already exists for this URL (normalized, query params removed)
 4. **Concurrency Lock**: Prevent duplicate concurrent analyses per user using in-memory Map
-5. **Platform Detection**: Automatically detect platform (TikTok, Instagram, etc.) via PlatformFactory
-6. **Metadata Extraction**: Platform-specific metadata retrieval (title, description, author)
-7. **Audio Extraction**: Platform-specific audio extraction (yt-dlp for TikTok, custom for others)
+5. **Platform Detection**: Automatically detect platform (TikTok, Instagram, YouTube) via PlatformFactory
+6. **Metadata Extraction**: Platform-specific metadata retrieval (title, author, thumbnailUrl)
+7. **Audio Extraction**: Platform-specific audio extraction (yt-dlp)
 8. **Transcription**: OpenAI Whisper API transcribes audio to text
 9. **Recipe Analysis**: GPT-4o-mini analyzes transcription + metadata to extract structured recipe
-10. **Database Persistence**: Save recipe, ingredients, steps with intelligent food_items matching
-11. **Cleanup**: Automatic cleanup of temporary files
-12. **Lock Release**: Remove user from activeAnalyses Map
+10. **Thumbnail Upload**: Download thumbnail from metadata.thumbnailUrl and upload to Supabase Storage in platform-specific folder
+11. **Database Persistence**: Save recipe, ingredients, steps with intelligent food_items matching
+12. **Cleanup**: Automatic cleanup of temporary files
+13. **Lock Release**: Remove user from activeAnalyses Map
 
 ### Key Services
 
@@ -29,8 +30,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **services/platforms/** - Platform-specific implementations
   - **base/Platform.js**: Abstract base class defining platform interface
   - **tiktok/TikTokPlatform.js**: TikTok implementation (yt-dlp extraction, oEmbed metadata) ✅
-  - **youtube/YouTubePlatform.js**: YouTube/Shorts implementation (yt-dlp extraction, oEmbed metadata) ✅
-  - **instagram/InstagramPlatform.js**: Instagram Reels implementation (yt-dlp extraction, oEmbed metadata) ✅
+  - **youtube/YouTubePlatform.js**: YouTube Shorts implementation (yt-dlp extraction, oEmbed metadata) ✅
+  - **instagram/InstagramPlatform.js**: Instagram Reels implementation (yt-dlp extraction, oEmbed API for metadata/thumbnail) ✅
   - **PlatformFactory.js**: Auto-detection and instantiation of correct platform
 
 - **services/ai/** - AI services (platform-agnostic)
@@ -76,6 +77,12 @@ The database.js service performs intelligent fuzzy matching between recipe ingre
 - Custom error code 'NOT_RECIPE' when content is non-culinary (status 400)
 - Locks always released in finally block
 - Temporary audio files cleaned up on both success and error paths
+
+**Environment Variables**:
+- `OPENAI_API_KEY` - Required for Whisper transcription and GPT analysis
+- `SUPABASE_URL` - Required for database access
+- `SUPABASE_SERVICE_KEY` - Required for database operations (bypasses RLS)
+- Instagram metadata and thumbnails are retrieved via HTML scraping (Open Graph tags)
 
 ## Development Commands
 
@@ -224,3 +231,13 @@ The orchestrator (`analyzeRecipeFromVideo`) automatically detects and uses the n
 - Temporary audio files stored in downloads/ directory
 - Always call cleanupFile() in try/catch finally blocks
 - Unique filenames using timestamp: `audio_{Date.now()}.mp3`
+
+### Thumbnail Management
+- Thumbnails are retrieved via platform's `fetchMetadata()` method (not fetched separately)
+- Uploaded to Supabase Storage bucket `recipe-thumbnails` organized by platform folder
+- Storage path: `{platform}/{platform}-{timestamp}-{uuid}.{extension}`
+  - TikTok: `tiktok/tiktok-1699999999-abc123.jpg`
+  - YouTube: `youtube/youtube-1699999999-def456.jpg`
+  - Instagram: `instagram/instagram-1699999999-ghi789.jpg`
+- `uploadThumbnailToStorage(thumbnailUrl, platform)` handles download and upload
+- `getTikTokThumbnail()` is deprecated - use `uploadThumbnailToStorage()` instead
