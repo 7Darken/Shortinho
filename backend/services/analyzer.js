@@ -1,350 +1,102 @@
 /**
- * Service d'analyse de recettes TikTok
- * Fonctions réutilisables pour l'extraction, transcription et analyse
+ * Orchestrateur principal pour l'analyse de recettes depuis différentes plateformes
+ * Architecture modulaire permettant l'ajout facile de nouvelles plateformes
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import { spawn } from 'child_process';
-import FormData from 'form-data';
-import fetch from 'node-fetch';
+import { detectPlatform } from './platforms/PlatformFactory.js';
+import { transcribeAudio } from './ai/transcription.js';
+import { analyzeRecipe } from './ai/recipeAnalyzer.js';
 
 /**
- * Vérifie si yt-dlp est installé
+ * Analyse une recette depuis une URL de vidéo (TikTok, Instagram, etc.)
+ * @param {string} videoUrl - URL de la vidéo contenant la recette
+ * @param {string} outputDir - Dossier pour les fichiers temporaires
+ * @param {Object} options - Options d'analyse
+ * @param {string} options.language - Langue de la transcription (défaut: 'fr')
+ * @returns {Promise<Object>} Résultat de l'analyse complète
  */
-export async function checkYtDlp() {
-  return new Promise((resolve, reject) => {
-    const check = spawn('yt-dlp', ['--version'], { 
-      stdio: 'pipe'
-    });
-    
-    let output = '';
-    check.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-    
-    check.on('close', (code) => {
-      if (code === 0 && output) {
-        resolve(output.trim());
-      } else {
-        reject(new Error('yt-dlp non trouvé'));
-      }
-    });
-    
-    check.on('error', () => {
-      reject(new Error('yt-dlp non installé'));
-    });
-  });
-}
+export async function analyzeRecipeFromVideo(videoUrl, outputDir, options = {}) {
+  const { language = 'fr' } = options;
 
-/**
- * Extrait l'audio d'une vidéo TikTok avec yt-dlp
- * @param {string} tiktokUrl - URL TikTok
- * @param {string} outputDir - Dossier de sortie
- * @returns {Promise<string>} Chemin du fichier audio téléchargé
- */
-export async function extractTikTokAudio(tiktokUrl, outputDir) {
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  if (!OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY non définie dans .env');
-  }
+  console.log('\n╔════════════════════════════════════════════════════════════╗');
+  console.log('║         ANALYSE DE RECETTE - MULTI-PLATEFORMES            ║');
+  console.log('╚════════════════════════════════════════════════════════════╝\n');
 
-  // Vérifier que yt-dlp est installé
-  await checkYtDlp();
-
-  // Créer un nom de fichier unique
-  const timestamp = Date.now();
-  const outputPath = path.join(outputDir, `audio_${timestamp}.%(ext)s`);
-
-  // Configuration yt-dlp
-  const ytdlpArgs = [
-    '--extract-audio',
-    '--audio-format', 'mp3',
-    '--audio-quality', '0',
-    '--no-playlist',
-    '--no-warnings',
-    '--progress',
-    '--console-title',
-    '-o', outputPath,
-    tiktokUrl,
-  ];
+  let audioPath = null;
+  let platform = null;
 
   try {
-    const ytdlp = spawn('yt-dlp', ytdlpArgs, { 
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
+    // ÉTAPE 1: Détection de la plateforme
+    console.log('🔍 ÉTAPE 1/5: Détection de la plateforme...');
+    platform = detectPlatform(videoUrl);
+    console.log(`✅ Plateforme: ${platform.name}\n`);
 
-    await new Promise((resolve, reject) => {
-      ytdlp.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`yt-dlp a échoué avec le code ${code}`));
-        }
-      });
-      
-      ytdlp.on('error', (error) => {
-        reject(new Error(`Erreur lors de l'exécution de yt-dlp: ${error.message}`));
-      });
-    });
+    // ÉTAPE 2: Récupération des métadonnées
+    console.log('📋 ÉTAPE 2/5: Récupération des métadonnées...');
+    const metadata = await platform.fetchMetadata(videoUrl);
+    let description = null;
 
-    // Chercher le fichier créé
-    const files = fs.readdirSync(outputDir);
-    const audioFile = files.find((file) => file.startsWith(`audio_${timestamp}`));
-
-    if (!audioFile) {
-      throw new Error('Fichier audio non créé');
+    if (metadata && metadata.title) {
+      description = platform.cleanDescription(metadata.title);
+      console.log('✅ Métadonnées récupérées');
+      console.log('📝 Description:', description.substring(0, 100) + '...\n');
+    } else {
+      console.log('⚠️  Pas de métadonnées disponibles\n');
     }
 
-    return path.join(outputDir, audioFile);
+    // ÉTAPE 3: Extraction de l'audio
+    console.log('🎵 ÉTAPE 3/5: Extraction de l\'audio...');
+    audioPath = await platform.extractAudio(videoUrl, outputDir);
+    console.log('✅ Audio extrait avec succès\n');
+
+    // ÉTAPE 4: Transcription avec Whisper
+    console.log('🎤 ÉTAPE 4/5: Transcription audio (Whisper)...');
+    const transcription = await transcribeAudio(audioPath, { language });
+    console.log('✅ Transcription terminée\n');
+
+    // ÉTAPE 5: Analyse de la recette avec GPT
+    console.log('🤖 ÉTAPE 5/5: Analyse de la recette (GPT)...');
+    const recipe = await analyzeRecipe(transcription, { description });
+    console.log('✅ Analyse terminée\n');
+
+    // Nettoyage du fichier audio temporaire
+    if (audioPath) {
+      await platform.cleanup(audioPath);
+    }
+
+    // Résultat final
+    console.log('╔════════════════════════════════════════════════════════════╗');
+    console.log('║                   ANALYSE TERMINÉE                         ║');
+    console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+    return {
+      success: true,
+      platform: platform.name,
+      recipe,
+      metadata,
+      transcription,
+    };
+
   } catch (error) {
+    console.error('\n❌ ERREUR lors de l\'analyse:', error.message);
+
+    // Nettoyage en cas d'erreur
+    if (audioPath && platform) {
+      await platform.cleanup(audioPath);
+    }
+
     throw error;
   }
 }
 
 /**
- * Transcrit un fichier audio avec OpenAI Whisper API
- * @param {string} audioFilePath - Chemin du fichier audio
- * @returns {Promise<string>} Transcription du fichier
- */
-export async function transcribeAudio(audioFilePath) {
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  
-  if (!OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY non définie dans .env');
-  }
-  
-  try {
-    // Créer le FormData
-    const formData = new FormData();
-    
-    // Lire le fichier audio et l'ajouter au form
-    const audioBuffer = fs.readFileSync(audioFilePath);
-    const fileName = path.basename(audioFilePath);
-    
-    // Déterminer le type MIME
-    let mimeType = 'audio/mpeg';
-    if (fileName.endsWith('.mp4')) {
-      mimeType = 'video/mp4';
-    } else if (fileName.endsWith('.m4a')) {
-      mimeType = 'audio/m4a';
-    } else if (fileName.endsWith('.wav')) {
-      mimeType = 'audio/wav';
-    }
-    
-    formData.append('file', audioBuffer, {
-      filename: fileName,
-      contentType: mimeType,
-    });
-    formData.append('model', 'whisper-1');
-    formData.append('language', 'fr');
-    formData.append('response_format', 'json');
-    
-    // Envoyer à Whisper API
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: formData,
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || `Erreur API: ${response.status}`);
-    }
-    
-    const result = await response.json();
-    
-    if (!result.text) {
-      throw new Error('Aucune transcription retournée par Whisper');
-    }
-    
-    return result.text;
-  } catch (error) {
-    throw error;
-  }
-}
-
-/**
- * Analyse une transcription de recette avec GPT
- * @param {string} transcription - Transcription textuelle de la vidéo
- * @param {string} tiktokDescription - Description TikTok (optionnelle)
- * @returns {Promise<Object>} Recette structurée avec ingrédients, étapes, macros, etc.
- */
-export async function analyzeRecipe(transcription, tiktokDescription = null) {
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  
-  if (!OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY non définie dans .env');
-  }
-  
-  // Construire le prompt avec transcription et description TikTok si disponible
-  let contentToAnalyze = `TRANSCRIPTION AUDIO :
-${transcription}`;
-
-  if (tiktokDescription && tiktokDescription.trim().length > 0) {
-    contentToAnalyze += `
-
-DESCRIPTION TIKTOK :
-${tiktokDescription}`;
-  }
-  const EQUIPMENT_LIST = [
-    "four",
-    "micro-ondes",
-    "air fryer",
-    "mixeur",
-    "poêle",
-  ];
-
-  const prompt = `Tu es un expert en analyse de recettes culinaires. Analyse cette recette de cuisine et extrait toutes les informations disponibles de manière structurée.
-
-${contentToAnalyze}
- Si le lien ou la description **n’a rien à voir avec une recette**, renvoie uniquement :
-{
-  "error": "NOT_RECIPE",
-  "message": "Ce lien TikTok ne contient pas de recette ou n'est pas une vidéo culinaire."
-}
-EXTRACTIONS DEMANDÉES :
-1. **Informations de base** : Titre, nombre de portions, temps (préparation, cuisson, total)
-2. **Ingrédients** : Liste complète avec quantités exactes mentionnées (ou estimations visuelles si possible)
-3. **Étapes** : Instructions claires, concises, dans l'ordre chronologique
-  - Pour chaque étape, inclure **un tableau ingredients_used** qui contient les noms exacts des ingrédients utilisés dans cette étape, correspondant aux noms listés dans la section ingrédients.
-
-4. **Équipements utilisés** : à partir de la liste suivante uniquement (${EQUIPMENT_LIST.join(", ")})
-  — Si un équipement n’est pas mentionné ou implicite, ne l’ajoute pas du tout.
-5. **Valeurs nutritionnelles estimées (pour toute la recette)** :
-   - calories (en kcal)
-   - protéines (en g)
-   - glucides (en g)
-   - lipides (en g)
-**Méthode de calcul nutritionnel :**
-- Estime les valeurs à partir des ingrédients et leurs quantités (pas au hasard). 
-- Additionne les valeurs pour obtenir les totaux
-- Propose une estimation raisonnable même si certains ingrédients ont des quantités approximatives
-
-IMPORTANT :
-- PRIORISER les informations de la transcription audio
-- La description TikTok peut contenir des informations supplémentaires utiles (titres, ingrédients, astuces, etc.)
-- ÉVALUE D'ABORD si la description TikTok aide à créer une meilleure recette
-- Si la description TikTok est pertinente et ajoute de la valeur, INTÈGRE ces informations
-- Si la description TikTok n'est pas pertinente (musique, trends, etc.), IGNORE-la complètement
-- Format JSON strict, sans texte avant ou après
-- Structure claire et lisible
-- Quantités en unités standard (g, ml, c.à.s, etc.)
-- Ne retourne QUE les champs demandés, rien d'autre
-
-Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
-{
-  "title": "Nom de la recette",
-  "servings": 4,
-  "prep_time": "15 min",
-  "cook_time": "30 min",
-  "total_time": "45 min",
-  "ingredients": [
-    {
-      "name": "Nom de l'ingrédient",
-      "quantity": "200",
-      "unit": "g"
-    }
-  ],
-  "steps": [
-    {
-      "order": 1,
-      "text": "Instruction claire et concise",
-      "duration": "10 min",
-      "temperature": "180°C",
-      "ingredients_used": ["beurre", "sucre"]
-
-    }
-  ],
-  "equipment": ["four", "mixeur"],
-  "nutrition": {
-    "calories": 1200,
-    "proteins": 45,
-    "carbs": 130,
-    "fats": 60
-  }
-}`;
-
-  try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'Tu es un expert en analyse de recettes culinaires et nutrition. Tu analyses les recettes avec précision et calcules les macronutriments.',
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.3,
-        response_format: { type: 'json_object' },
-      }),
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || `Erreur API: ${response.status}`);
-    }
-    
-    const result = await response.json();
-    const content = result.choices[0]?.message?.content;
-    console.log(content);
-    
-    if (!content) {
-      console.error('❌ Pas de contenu dans la réponse GPT:', JSON.stringify(result, null, 2));
-      throw new Error('Aucune réponse retournée par GPT');
-    }
-    
-    // Parser le JSON
-    try {
-      const recipe = JSON.parse(content);
-      
-      // Vérifier si GPT a détecté que ce n'est pas une recette
-      if (recipe.error === 'NOT_RECIPE') {
-        console.warn('⚠️ [GPT] Le contenu TikTok n\'est pas une recette culinaire');
-        console.log('📝 [GPT] Message:', recipe.message);
-        
-        // Créer une erreur spécifique pour ce cas
-        const notRecipeError = new Error(recipe.message || 'Ce lien TikTok ne contient pas de recette ou n\'est pas une vidéo culinaire.');
-        notRecipeError.code = 'NOT_RECIPE';
-        notRecipeError.userMessage = recipe.message;
-        throw notRecipeError;
-      }
-      
-      // Si c'est une vraie recette, la retourner
-      return recipe;
-    } catch (parseError) {
-      // Si c'est notre erreur NOT_RECIPE, la relancer telle quelle
-      if (parseError.code === 'NOT_RECIPE') {
-        throw parseError;
-      }
-      
-      // Sinon, c'est une erreur de parsing JSON
-      console.error('❌ Erreur de parsing JSON:', parseError.message);
-      console.error('📄 Contenu reçu:', content.substring(0, 500));
-      throw new Error('Réponse JSON invalide de GPT');
-    }
-  } catch (error) {
-    console.error('❌ Erreur dans analyzeRecipe:', error.message);
-    throw error;
-  }
-}
-
-/**
- * Nettoie les fichiers temporaires
+ * Fonction helper pour nettoyer les fichiers temporaires
  * @param {string} filePath - Chemin du fichier à supprimer
  */
 export async function cleanupFile(filePath) {
+  const fs = await import('fs');
+  const path = await import('path');
+
   try {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
@@ -355,46 +107,44 @@ export async function cleanupFile(filePath) {
   }
 }
 
+// Export des fonctions anciennes pour compatibilité (si nécessaire)
+// Ces fonctions sont maintenant deprecated et redirigent vers les nouveaux modules
+
 /**
- * Récupère les métadonnées TikTok via l'API oEmbed
- * @param {string} tiktokUrl - URL de la vidéo TikTok
- * @returns {Promise<Object | null>} - Métadonnées TikTok ou null
+ * @deprecated Utiliser TikTokPlatform.extractAudio() à la place
+ */
+export async function extractTikTokAudio(tiktokUrl, outputDir) {
+  const { TikTokPlatform } = await import('./platforms/tiktok/TikTokPlatform.js');
+  const platform = new TikTokPlatform();
+  return platform.extractAudio(tiktokUrl, outputDir);
+}
+
+/**
+ * @deprecated Utiliser transcribeAudio() de ./ai/transcription.js à la place
+ */
+export { transcribeAudio };
+
+/**
+ * @deprecated Utiliser analyzeRecipe() de ./ai/recipeAnalyzer.js à la place
+ */
+export { analyzeRecipe };
+
+/**
+ * @deprecated Utiliser TikTokPlatform.fetchMetadata() à la place
  */
 export async function fetchTikTokMeta(tiktokUrl) {
-  try {
-    console.log('🔍 [TikTok] Récupération métadonnées via oEmbed...');
-    const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(tiktokUrl)}`;
-    
-    const response = await fetch(oembedUrl);
-    
-    if (!response.ok) {
-      console.warn('⚠️  [TikTok] Impossible de récupérer les métadonnées:', response.status);
-      return null;
-    }
-    
-    const data = await response.json();
-    
-    return {
-      title: data.title || '',
-      author: data.author_name || '',
-      authorUrl: data.author_url || '',
-      thumbnailUrl: data.thumbnail_url || '',
-    };
-  } catch (error) {
-    console.error('❌ [TikTok] Erreur lors de la récupération:', error.message);
-    return null;
-  }
+  const { TikTokPlatform } = await import('./platforms/tiktok/TikTokPlatform.js');
+  const platform = new TikTokPlatform();
+  return platform.fetchMetadata(tiktokUrl);
 }
 
 /**
- * Nettoie la description TikTok (supprime hashtags, espaces multiples)
- * @param {string} rawText - Texte brut de la description
- * @returns {string} - Texte nettoyé
+ * @deprecated Utiliser Platform.cleanDescription() à la place
  */
 export function cleanDescription(rawText) {
+  if (!rawText) return '';
   return rawText
-    .replace(/\s+/g, ' ') // supprimer les multiples espaces
-    .replace(/#\w+/g, '') // supprimer les hashtags
+    .replace(/\s+/g, ' ')
+    .replace(/#\w+/g, '')
     .trim();
 }
-

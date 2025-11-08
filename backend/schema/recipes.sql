@@ -12,6 +12,7 @@ create table if not exists public.recipes (
   source_url text,
   audio_url text,
   image_url text,
+  platform text,          -- plateforme source (TikTok, YouTube, Instagram)
   created_at timestamp with time zone default now()
    -- 🔹 Nouveaux champs nutrition
   calories numeric,       -- kcal totales
@@ -21,6 +22,10 @@ create table if not exists public.recipes (
 
   -- 🔹 Nouveaux champs équipements utilisés
   equipment text[],       -- Liste des équipements (four, poêle, mixeur, etc.)
+
+  cuisine_origin text,    -- origine de la cuisine (française, italienne, mexicaine, etc.)
+  meal_type text,         -- type de repas (déjeuner, dîner, brunch, etc.)
+  diet_type text[],         -- type de régime (végétarien, sans gluten, sans lactose, etc.)
 );
 
 alter table public.recipes enable row level security;

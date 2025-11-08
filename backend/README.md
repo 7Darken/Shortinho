@@ -1,10 +1,12 @@
-# Oshii Backend - Analyse Complète de Recettes TikTok
+# Oshii Backend - Analyse Multi-Plateformes de Recettes Vidéo
 
-Backend complet en Node.js pour analyser les recettes de cuisine TikTok :
+Backend complet en Node.js pour analyser les recettes de cuisine depuis **TikTok**, **YouTube Shorts** et **Instagram Reels** :
+- **Multi-plateformes** : Détection automatique de TikTok, YouTube, Instagram
 - **Extraction audio** avec yt-dlp
-- **Transcription** avec Whisper API
+- **Transcription** avec OpenAI Whisper API
 - **Analyse structurée** avec GPT-4o-mini
 - **Calcul des macros** automatique
+- **Architecture modulaire** : Ajoutez facilement de nouvelles plateformes
 
 ## 🚀 Installation
 
@@ -59,13 +61,39 @@ npm install
 
 ## 📖 Utilisation
 
+### Mode Serveur (Production)
+
 ```bash
-# Démarrer l'application
+# Démarrer le serveur API
 npm start
 
 # Ou en mode watch (redémarre automatiquement après modifications)
 npm run dev
 ```
+
+### Mode Test (Développement Local)
+
+Testez une analyse complète sans serveur ni base de données :
+
+```bash
+# Tester avec TikTok
+npm run test:analyze https://www.tiktok.com/@chef/video/123456
+
+# Tester avec YouTube Shorts
+npm run test:analyze https://www.youtube.com/shorts/abc123
+
+# Tester avec Instagram Reel
+npm run test:analyze https://www.instagram.com/reel/ABC123/
+
+# Afficher aussi le JSON complet
+npm run test:analyze <URL> --json
+```
+
+Ce mode test permet de :
+- ✅ Tester le workflow complet sans enregistrer dans la base
+- ✅ Vérifier la détection de plateforme
+- ✅ Voir toutes les étapes d'analyse en détail
+- ✅ Débugger rapidement sans polluer les données
 
 **Note:** L'application peut proposer d'installer yt-dlp automatiquement si non détecté.
 

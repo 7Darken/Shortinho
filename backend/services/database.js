@@ -96,18 +96,26 @@ async function findMatchingFoodItem(rawName) {
       return null;
     }
 
+    console.log(`🔍 [Database] Recherche de match pour "${rawName}" parmi ${items.length} food_items`);
     const normRawName = normalizeName(rawName);
+    console.log(`🔍 [Database] Nom normalisé: "${normRawName}"`);
 
     // Calculer les scores de similarité pour chaque food_item
     const scoredItems = items.map((item) => {
       const normItemName = normalizeName(item.name);
       const score = similarityScore(normRawName, normItemName);
-      return { item, score, name: item.name };
+      return { item, score, name: item.name, normName: normItemName };
     });
 
     // Trier par score décroissant et prendre le meilleur
     scoredItems.sort((a, b) => b.score - a.score);
     const bestMatch = scoredItems[0];
+
+    // Afficher les 3 meilleurs matchs pour le débogage
+    console.log('📊 [Database] Top 3 matchs:');
+    scoredItems.slice(0, 3).forEach((item, idx) => {
+      console.log(`   ${idx + 1}. "${item.name}" (normalisé: "${item.normName}") - Score: ${item.score.toFixed(2)}`);
+    });
 
     // Seuil minimum de 0.5 pour considérer un match
     if (bestMatch && bestMatch.score >= 0.5) {
@@ -229,7 +237,8 @@ async function getTikTokThumbnail(tiktokUrl) {
  * @param {string} recipeData.prepTime - Temps de préparation
  * @param {string} recipeData.cookTime - Temps de cuisson
  * @param {string} recipeData.totalTime - Temps total
- * @param {string} recipeData.sourceUrl - URL source (TikTok)
+ * @param {string} recipeData.sourceUrl - URL source
+ * @param {string} recipeData.platform - Plateforme source (TikTok, YouTube, Instagram)
  * @param {Array} recipeData.ingredients - Liste des ingrédients
  * @param {Array} recipeData.steps - Liste des étapes
  * @param {Array} recipeData.equipment - Liste des équipements
@@ -241,18 +250,31 @@ export async function saveRecipeToDatabase(recipeData) {
   console.log('💾 [Database] Sauvegarde de la recette dans Supabase...');
 
   try {
-    const { 
-      userId, 
-      title, 
-      servings, 
-      prepTime, 
-      cookTime, 
-      totalTime, 
+    const {
+      userId,
+      title,
+      servings,
+      prepTime,
+      cookTime,
+      totalTime,
       sourceUrl,
+      platform,
       equipment,
       nutrition,
       generationMode,
+      cuisine_origin,
+      meal_type,
+      diet_type,
     } = recipeData;
+
+    const normalizedDietType = (() => {
+      if (diet_type == null) {
+        return null;
+      }
+      const arrayValue = Array.isArray(diet_type) ? diet_type : [diet_type];
+      const filtered = arrayValue.filter((value) => Boolean(value));
+      return filtered.length > 0 ? filtered : null;
+    })();
 
     // 1. Récupérer le thumbnail de la vidéo TikTok
     const imageUrl = await getTikTokThumbnail(sourceUrl);
@@ -260,6 +282,9 @@ export async function saveRecipeToDatabase(recipeData) {
     // 2. Insérer la recette
     console.log('📝 [Database] Création de la recette...');
     console.log('🎯 [Database] Mode de génération:', generationMode || 'free');
+    if (platform) {
+      console.log('📱 [Database] Plateforme:', platform);
+    }
     if (equipment && equipment.length > 0) {
       console.log('🔧 [Database] Équipements:', equipment.join(', '));
     }
@@ -271,6 +296,15 @@ export async function saveRecipeToDatabase(recipeData) {
         fats: nutrition.fats,
       });
     }
+    if (cuisine_origin) {
+      console.log('🌍 [Database] Origine cuisine:', cuisine_origin);
+    }
+    if (meal_type) {
+      console.log('🍽️  [Database] Type de repas:', meal_type);
+    }
+    if (normalizedDietType && normalizedDietType.length > 0) {
+      console.log('🥗 [Database] Types de régime:', normalizedDietType.join(', '));
+    }
     const { data: recipe, error: recipeError } = await supabase
       .from('recipes')
       .insert({
@@ -281,6 +315,7 @@ export async function saveRecipeToDatabase(recipeData) {
         cook_time: cookTime,
         total_time: totalTime,
         source_url: sourceUrl,
+        platform: platform || null,
         image_url: imageUrl,
         equipment: equipment || null,
         calories: nutrition?.calories || null,
@@ -288,6 +323,9 @@ export async function saveRecipeToDatabase(recipeData) {
         carbs: nutrition?.carbs || null,
         fats: nutrition?.fats || null,
         generation_mode: generationMode || 'free',
+        cuisine_origin: cuisine_origin || null,
+        meal_type: meal_type || null,
+        diet_type: normalizedDietType,
       })
       .select()
       .single();

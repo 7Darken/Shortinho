@@ -1,13 +1,15 @@
 {
   "name": "oshii-backend",
   "version": "1.0.0",
-  "description": "Backend API pour analyser les recettes TikTok",
+  "description": "Backend API multi-plateformes pour analyser les recettes de cuisine (TikTok, YouTube Shorts, Instagram)",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "cli": "node index.js"
+    "cli": "node index.js",
+    "test:platforms": "node test-platforms.js",
+    "test:analyze": "node test-analyze.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.78.0",

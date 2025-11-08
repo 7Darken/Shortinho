@@ -12,12 +12,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
 import {
-  extractTikTokAudio,
-  transcribeAudio,
-  analyzeRecipe,
+  analyzeRecipeFromVideo,
   cleanupFile,
-  fetchTikTokMeta,
-  cleanDescription,
 } from './services/analyzer.js';
 import { authenticateToken } from './middlewares/auth.js';
 import { 
@@ -146,9 +142,7 @@ app.post('/analyze', authenticateToken, async (req, res) => {
   console.log('🔒 [Server] URL normalisée:', normalizedUrl);
 
   console.log('\n🚀 Nouvelle analyse demandée');
-  console.log('📹 URL TikTok:', tiktokUrl);
-
-  let audioPath = null;
+  console.log('📹 URL:', tiktokUrl);
 
   try {
     // ⚠️  VÉRIFICATION DES DROITS DE GÉNÉRATION
@@ -172,34 +166,16 @@ app.post('/analyze', authenticateToken, async (req, res) => {
     console.log('💎 [Server] Premium:', isPremium, '| Générations restantes:', freeGenerationsRemaining);
     console.log('');
 
-    // Étape 0: Récupérer les métadonnées TikTok
-    console.log('\n🔍 ÉTAPE 0/5: Récupération métadonnées TikTok...');
-    const tiktokMeta = await fetchTikTokMeta(tiktokUrl);
-    let tiktokDescription = null;
-    if (tiktokMeta && tiktokMeta.title) {
-      tiktokDescription = cleanDescription(tiktokMeta.title);
-      console.log('✅ Description TikTok:', tiktokDescription.substring(0, 100));
-    } else {
-      console.log('⚠️  Pas de métadonnées TikTok disponibles');
-    }
+    // Analyser la recette avec la nouvelle architecture modulaire
+    const analysisResult = await analyzeRecipeFromVideo(tiktokUrl, AUDIO_DIR, {
+      language: 'fr', // Langue française par défaut
+    });
 
-    // Étape 1: Extraire l'audio
-    console.log('\n📦 ÉTAPE 1/5: Extraction audio...');
-    audioPath = await extractTikTokAudio(tiktokUrl, AUDIO_DIR);
-    console.log('✅ Audio extrait:', path.basename(audioPath));
+    const recipe = analysisResult.recipe;
+    const platform = analysisResult.platform; // TikTok, YouTube, Instagram
 
-    // Étape 2: Transcrire avec Whisper
-    console.log('\n🎤 ÉTAPE 2/5: Transcription Whisper...');
-    const transcription = await transcribeAudio(audioPath);
-    console.log('✅ Transcription réussie, longueur:', transcription.length, 'caractères');
-
-    // Étape 3: Analyser avec GPT (avec transcription ET description si disponible)
-    console.log('\n🤖 ÉTAPE 3/5: Analyse GPT...');
-    const recipe = await analyzeRecipe(transcription, tiktokDescription);
-    console.log('✅ Analyse réussie:', recipe.title);
-
-    // Étape 4: Sauvegarder dans Supabase
-    console.log('\n💾 ÉTAPE 4/5: Sauvegarde dans Supabase...');
+    // Sauvegarder dans Supabase
+    console.log('\n💾 SAUVEGARDE: Enregistrement dans Supabase...');
     const savedRecipe = await saveRecipeToDatabase({
       userId: req.user.id,
       title: recipe.title,
@@ -208,18 +184,19 @@ app.post('/analyze', authenticateToken, async (req, res) => {
       cookTime: recipe.cook_time,
       totalTime: recipe.total_time,
       sourceUrl: tiktokUrl,
+      platform: platform, // Plateforme source (TikTok, YouTube, Instagram)
       ingredients: recipe.ingredients,
       steps: recipe.steps,
       equipment: recipe.equipment,
       nutrition: recipe.nutrition,
       generationMode: isPremium ? 'premium' : 'free', // Pour les statistiques
+      cuisine_origin: recipe.cuisine_origin,
+      meal_type: recipe.meal_type,
+      diet_type: recipe.diet_type,
     });
     console.log('✅ Sauvegarde réussie!');
 
-    // Nettoyer le fichier audio temporaire
-    if (audioPath) {
-      await cleanupFile(audioPath);
-    }
+    // Note: Le nettoyage des fichiers temporaires est géré automatiquement par analyzeRecipeFromVideo
 
     // Retourner la recette avec l'ID de la base de données
     console.log('\n🎉 Analyse terminée avec succès!\n');
@@ -256,13 +233,10 @@ app.post('/analyze', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Erreur lors de l\'analyse:', error.message);
-    
-    // Nettoyer en cas d'erreur
-    if (audioPath) {
-      await cleanupFile(audioPath);
-    }
 
-    // Cas spécial : Le contenu TikTok n'est pas une recette
+    // Note: Le nettoyage des fichiers temporaires est géré automatiquement par analyzeRecipeFromVideo
+
+    // Cas spécial : Le contenu n'est pas une recette
     if (error.code === 'NOT_RECIPE') {
       console.warn('⚠️  [Server] Contenu non-culinaire détecté');
       // Déverrouiller avant de retourner l'erreur
