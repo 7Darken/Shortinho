@@ -78,9 +78,10 @@ function similarityScore(str1, str2) {
 /**
  * Trouve un food_item qui correspond à un nom d'ingrédient
  * @param {string} rawName - Nom brut de l'ingrédient
+ * @param {string} language - Langue pour le matching ('fr' ou 'en', défaut: 'fr')
  * @returns {Promise<Object | null>} - Food item correspondant ou null
  */
-async function findMatchingFoodItem(rawName) {
+async function findMatchingFoodItem(rawName, language = 'fr') {
   try {
     const { data: items, error } = await supabase
       .from('food_items')
@@ -96,15 +97,17 @@ async function findMatchingFoodItem(rawName) {
       return null;
     }
 
-    console.log(`🔍 [Database] Recherche de match pour "${rawName}" parmi ${items.length} food_items`);
+    console.log(`🔍 [Database] Recherche de match pour "${rawName}" parmi ${items.length} food_items (langue: ${language})`);
     const normRawName = normalizeName(rawName);
     console.log(`🔍 [Database] Nom normalisé: "${normRawName}"`);
 
     // Calculer les scores de similarité pour chaque food_item
     const scoredItems = items.map((item) => {
-      const normItemName = normalizeName(item.name);
+      // Utiliser name_en si langue anglaise, sinon name
+      const itemName = language === 'en' ? (item.name_en || item.name) : item.name;
+      const normItemName = normalizeName(itemName);
       const score = similarityScore(normRawName, normItemName);
-      return { item, score, name: item.name, normName: normItemName };
+      return { item, score, name: itemName, normName: normItemName };
     });
 
     // Trier par score décroissant et prendre le meilleur
@@ -353,6 +356,7 @@ export async function saveRecipeToDatabase(recipeData) {
       cuisine_origin,
       meal_type,
       diet_type,
+      language = 'fr', // Langue pour le matching des food_items
     } = recipeData;
 
     const normalizedDietType = (() => {
@@ -439,7 +443,7 @@ export async function saveRecipeToDatabase(recipeData) {
       
       const ingredientsToInsert = await Promise.all(
         recipeData.ingredients.map(async (ing) => {
-          const matchedFoodItem = await findMatchingFoodItem(ing.name);
+          const matchedFoodItem = await findMatchingFoodItem(ing.name, language);
           return {
             recipe_id: recipe.id,
             name: ing.name,

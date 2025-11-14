@@ -23,7 +23,7 @@ export async function transcribeAudio(audioFilePath, options = {}) {
   }
 
   const {
-    language = 'fr',
+    language = options.language,
     model = 'whisper-1',
   } = options;
 

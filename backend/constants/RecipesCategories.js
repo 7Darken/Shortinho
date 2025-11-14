@@ -10,7 +10,6 @@ export const CUISINE_ORIGINS = Object.freeze([
   'espagnole',
   'mexicaine',
   'américaine',
-  'méditerranéenne',
   'libanaise',
   'marocaine',
   'turque',
@@ -19,10 +18,8 @@ export const CUISINE_ORIGINS = Object.freeze([
   'portugaise',
   'allemande',
   'britannique',
-  'scandinave',
   'africaine',
   'fusion',
-  'autre',
 ]);
 
 export const MEAL_TYPES = Object.freeze([
@@ -53,4 +50,6 @@ export const RECIPE_CATEGORIES = Object.freeze({
   meal_type: MEAL_TYPES,
   diet_type: DIET_TYPES,
 });
+
+
 

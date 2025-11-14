@@ -16,14 +16,15 @@ import {
   cleanupFile,
 } from './services/analyzer.js';
 import { authenticateToken } from './middlewares/auth.js';
-import { 
-  saveRecipeToDatabase, 
-  deleteUserAccount, 
+import {
+  saveRecipeToDatabase,
+  deleteUserAccount,
   getRecipeFromDatabase,
   checkUserCanGenerateRecipe,
   decrementFreeGenerations,
   getExistingRecipeByUrl,
 } from './services/database.js';
+import { getUserStats } from './services/userStats.js';
 
 // Charger les variables d'environnement
 dotenv.config();
@@ -70,16 +71,26 @@ if (!fs.existsSync(AUDIO_DIR)) {
  */
 app.post('/analyze', authenticateToken, async (req, res) => {
   const tiktokUrl = req.body.url;
+  const language = req.body.language || 'fr'; // Langue par défaut: français
   const userId = req.user.id;
-  
+
   // Log de l'utilisateur qui fait la requête
   console.log('👤 [User]', req.user.email || req.user.id);
-  
-  
+  console.log('🌐 [Language]', language);
+
+
   if (!tiktokUrl || typeof tiktokUrl !== 'string') {
     return res.status(400).json({
       error: 'URL TikTok manquante ou invalide',
       message: 'Veuillez fournir une URL TikTok valide dans le champ "url"',
+    });
+  }
+
+  // Valider le paramètre language
+  if (language && !['fr', 'en'].includes(language)) {
+    return res.status(400).json({
+      error: 'Langue invalide',
+      message: 'La langue doit être "fr" ou "en"',
     });
   }
 
@@ -168,7 +179,7 @@ app.post('/analyze', authenticateToken, async (req, res) => {
 
     // Analyser la recette avec la nouvelle architecture modulaire
     const analysisResult = await analyzeRecipeFromVideo(tiktokUrl, AUDIO_DIR, {
-      language: 'fr', // Langue française par défaut
+      language, // Langue choisie par l'utilisateur (fr ou en)
     });
 
     const recipe = analysisResult.recipe;
@@ -195,6 +206,7 @@ app.post('/analyze', authenticateToken, async (req, res) => {
       cuisine_origin: recipe.cuisine_origin,
       meal_type: recipe.meal_type,
       diet_type: recipe.diet_type,
+      language: language, // Langue pour le matching des food_items
     });
     console.log('✅ Sauvegarde réussie!');
 
@@ -299,6 +311,33 @@ app.delete('/account', authenticateToken, async (req, res) => {
 });
 
 /**
+ * Endpoint pour obtenir les statistiques utilisateur
+ * GET /user/stats
+ * Headers: { "Authorization": "Bearer JWT_TOKEN" }
+ */
+app.get('/user/stats', authenticateToken, async (req, res) => {
+  console.log('📊 Demande de statistiques utilisateur');
+  console.log('👤 [User]', req.user.email || req.user.id);
+
+  try {
+    const stats = await getUserStats(req.user.id);
+
+    console.log('✅ Statistiques calculées avec succès');
+    res.status(200).json({
+      success: true,
+      stats,
+    });
+  } catch (error) {
+    console.error('❌ Erreur lors du calcul des statistiques:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Une erreur est survenue lors du calcul des statistiques',
+    });
+  }
+});
+
+/**
  * Endpoint de santé
  * GET /health
  */
@@ -319,9 +358,10 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('╚════════════════════════════════════════╝');
   console.log(`\n🚀 Serveur démarré sur http://localhost:${PORT}`);
   console.log('📡 Endpoints disponibles:');
-  console.log('   POST   /analyze  - Analyser une recette TikTok (🔒 Protégé)');
-  console.log('   DELETE /account  - Supprimer le compte utilisateur (🔒 Protégé)');
-  console.log('   GET    /health   - Vérifier l\'état de l\'API');
+  console.log('   POST   /analyze     - Analyser une recette TikTok (🔒 Protégé)');
+  console.log('   GET    /user/stats  - Statistiques utilisateur (🔒 Protégé)');
+  console.log('   DELETE /account     - Supprimer le compte utilisateur (🔒 Protégé)');
+  console.log('   GET    /health      - Vérifier l\'état de l\'API');
   console.log('\n✅ Prêt à recevoir des requêtes!\n');
 });
 

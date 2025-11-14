@@ -56,7 +56,7 @@ export async function analyzeRecipeFromVideo(videoUrl, outputDir, options = {}) 
 
     // ÉTAPE 5: Analyse de la recette avec GPT
     console.log('🤖 ÉTAPE 5/5: Analyse de la recette (GPT)...');
-    const recipe = await analyzeRecipe(transcription, { description });
+    const recipe = await analyzeRecipe(transcription, { description, language });
     console.log('✅ Analyse terminée\n');
 
     // Nettoyage du fichier audio temporaire

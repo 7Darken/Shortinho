@@ -10,6 +10,7 @@ import { RECIPE_CATEGORIES } from '../../constants/RecipesCategories.js';
  * @param {string} transcription - Transcription textuelle de la vidéo
  * @param {Object} options - Options d'analyse
  * @param {string} options.description - Description supplémentaire (ex: description TikTok)
+ * @param {string} options.language - Langue de sortie ('fr' ou 'en', défaut: 'fr')
  * @param {string} options.model - Modèle GPT à utiliser (défaut: 'gpt-4o-mini')
  * @param {number} options.temperature - Température du modèle (défaut: 0.3)
  * @returns {Promise<Object>} Recette structurée avec ingrédients, étapes, macros, etc.
@@ -23,11 +24,13 @@ export async function analyzeRecipe(transcription, options = {}) {
 
   const {
     description = null,
+    language = 'fr',
     model = 'gpt-4o-mini',
     temperature = 0.3,
   } = options;
 
   console.log('🤖 [GPT] Début de l\'analyse de la recette...');
+  console.log('🌐 [GPT] Langue demandée:', language);
   console.log('📊 [GPT] Transcription:', transcription.length, 'caractères');
   if (description) {
     console.log('📝 [GPT] Description supplémentaire:', description.substring(0, 100) + '...');
@@ -44,8 +47,8 @@ DESCRIPTION SUPPLÉMENTAIRE :
 ${description}`;
   }
 
-  // Liste d'équipements prédéfinis
-  const EQUIPMENT_LIST = [
+  // Listes d'équipements prédéfinis par langue
+  const EQUIPMENT_LIST_FR = [
     "four",
     "micro-ondes",
     "air fryer",
@@ -57,15 +60,50 @@ ${description}`;
     "batteur électrique",
   ];
 
+  const EQUIPMENT_LIST_EN = [
+    "oven",
+    "microwave",
+    "air fryer",
+    "mixer",
+    "pan",
+    "pot",
+    "blender",
+    "food processor",
+    "electric mixer",
+  ];
+
+  // Sélectionner la liste selon la langue
+  const EQUIPMENT_LIST = language === 'en' ? EQUIPMENT_LIST_EN : EQUIPMENT_LIST_FR;
+  console.log(language,"la langue")
+  // Déterminer la langue de sortie
+  const outputLanguage = language === 'en' ? 'English' : 'French';
+
   const prompt = `Tu es un expert en analyse de recettes culinaires. Analyse cette recette de cuisine et extrait toutes les informations disponibles de manière structurée.
 
 ${contentToAnalyze}
 
-⚠️ VÉRIFICATION PRÉALABLE :
+⚠️⚠️⚠️ RÈGLE ABSOLUE - LANGUE DE SORTIE ⚠️⚠️⚠️
+TOUTES les valeurs textuelles du JSON DOIVENT être écrites en ${outputLanguage}.
+Cela inclut:
+- title (titre de la recette)
+- ingredients[].name (noms des ingrédients)
+- ingredients[].unit (unités de mesure)
+- steps[].text (texte des étapes)
+- steps[].ingredients_used (noms des ingrédients utilisés)
+- equipment (noms des équipements)
+- cuisine_origin, meal_type, diet_type (classifications)
+- Tous les autres textes
+
+Les CLÉS du JSON restent en anglais (title, ingredients, steps, etc.)
+
+Exemple pour ${outputLanguage}:
+${language === 'en' ? '{"title": "Chocolate Cake", "ingredients": [{"name": "butter", "quantity": "200", "unit": "g"}]}' : '{"title": "Gâteau au chocolat", "ingredients": [{"name": "beurre", "quantity": "200", "unit": "g"}]}'}
+
+VÉRIFICATION PRÉALABLE :
 Si le lien ou la description **n'a rien à voir avec une recette**, renvoie uniquement :
 {
   "error": "NOT_RECIPE",
-  "message": "Ce lien ne contient pas de recette ou n'est pas une vidéo culinaire."
+  "message": "${language === 'en' ? 'This link does not contain a recipe or is not a cooking video.' : 'Ce lien ne contient pas de recette ou n\'est pas une vidéo culinaire.'}"
 }
 
 EXTRACTIONS DEMANDÉES :
@@ -141,6 +179,7 @@ Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
 
   try {
     console.log('📤 [GPT] Envoi à l\'API...');
+    console.log('🌐 [GPT] Output language:', outputLanguage);
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -153,7 +192,7 @@ Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
         messages: [
           {
             role: 'system',
-            content: 'Tu es un expert en analyse de recettes culinaires et nutrition. Tu analyses les recettes avec précision et calcules les macronutriments.',
+            content: `Tu es un expert en analyse de recettes culinaires et nutrition. Tu analyses les recettes avec précision et calcules les macronutriments. Tu DOIS répondre avec toutes les valeurs textuelles en ${outputLanguage}.`,
           },
           {
             role: 'user',
@@ -172,6 +211,7 @@ Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
 
     const result = await response.json();
     const content = result.choices[0]?.message?.content;
+    console.log(content);
 
     if (!content) {
       console.error('❌ [GPT] Pas de contenu dans la réponse:', JSON.stringify(result, null, 2));
