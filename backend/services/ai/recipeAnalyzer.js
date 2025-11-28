@@ -1,52 +1,19 @@
 /**
- * Service d'analyse de recettes avec OpenAI GPT
+ * Service d'analyse de recettes avec AI (multi-provider)
+ * Supporte OpenAI, Gemini, et autres providers via l'architecture modulaire
  */
 
-import fetch from 'node-fetch';
+import { getProvider, getModel } from './providers/AIProviderFactory.js';
 import { RECIPE_CATEGORIES } from '../../constants/RecipesCategories.js';
 
 /**
- * Analyse une transcription de recette avec GPT
- * @param {string} transcription - Transcription textuelle de la vidéo
- * @param {Object} options - Options d'analyse
- * @param {string} options.description - Description supplémentaire (ex: description TikTok)
- * @param {string} options.language - Langue de sortie ('fr' ou 'en', défaut: 'fr')
- * @param {string} options.model - Modèle GPT à utiliser (défaut: 'gpt-4o-mini')
- * @param {number} options.temperature - Température du modèle (défaut: 0.3)
- * @returns {Promise<Object>} Recette structurée avec ingrédients, étapes, macros, etc.
+ * Construit le prompt pour l'analyse de recettes
+ * @param {string} transcription - Transcription audio
+ * @param {string|null} description - Description supplémentaire
+ * @param {string} language - Langue de sortie ('fr' ou 'en')
+ * @returns {{ systemPrompt: string, userPrompt: string }}
  */
-export async function analyzeRecipe(transcription, options = {}) {
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-  if (!OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY non définie dans .env');
-  }
-
-  const {
-    description = null,
-    language = 'fr',
-    model = 'gpt-4o-mini',
-    temperature = 0.3,
-  } = options;
-
-  console.log('🤖 [GPT] Début de l\'analyse de la recette...');
-  console.log('🌐 [GPT] Langue demandée:', language);
-  console.log('📊 [GPT] Transcription:', transcription.length, 'caractères');
-  if (description) {
-    console.log('📝 [GPT] Description supplémentaire:', description.substring(0, 100) + '...');
-  }
-
-  // Construire le contenu à analyser
-  let contentToAnalyze = `TRANSCRIPTION AUDIO :
-${transcription}`;
-
-  if (description && description.trim().length > 0) {
-    contentToAnalyze += `
-
-DESCRIPTION SUPPLÉMENTAIRE :
-${description}`;
-  }
-
+function buildRecipePrompt(transcription, description, language) {
   // Listes d'équipements prédéfinis par langue
   const EQUIPMENT_LIST_FR = [
     "four",
@@ -72,13 +39,23 @@ ${description}`;
     "electric mixer",
   ];
 
-  // Sélectionner la liste selon la langue
   const EQUIPMENT_LIST = language === 'en' ? EQUIPMENT_LIST_EN : EQUIPMENT_LIST_FR;
-  console.log(language,"la langue")
-  // Déterminer la langue de sortie
   const outputLanguage = language === 'en' ? 'English' : 'French';
 
-  const prompt = `Tu es un expert en analyse de recettes culinaires. Analyse cette recette de cuisine et extrait toutes les informations disponibles de manière structurée.
+  // Construire le contenu à analyser
+  let contentToAnalyze = `TRANSCRIPTION AUDIO :
+${transcription}`;
+
+  if (description && description.trim().length > 0) {
+    contentToAnalyze += `
+
+DESCRIPTION SUPPLÉMENTAIRE :
+${description}`;
+  }
+
+  const systemPrompt = `Tu es un expert en analyse de recettes culinaires et nutrition. Tu analyses les recettes avec précision et calcules les macronutriments. Tu DOIS répondre avec toutes les valeurs textuelles en ${outputLanguage}.`;
+
+  const userPrompt = `Tu es un expert en analyse de recettes culinaires. Analyse cette recette de cuisine et extrait toutes les informations disponibles de manière structurée.
 
 ${contentToAnalyze}
 
@@ -177,99 +154,109 @@ Réponds UNIQUEMENT avec un objet JSON valide au format suivant :
   "diet_type": ["protéiné", "sans sucre"]
 }`;
 
-  try {
-    console.log('📤 [GPT] Envoi à l\'API...');
-    console.log('🌐 [GPT] Output language:', outputLanguage);
+  return { systemPrompt, userPrompt };
+}
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content: `Tu es un expert en analyse de recettes culinaires et nutrition. Tu analyses les recettes avec précision et calcules les macronutriments. Tu DOIS répondre avec toutes les valeurs textuelles en ${outputLanguage}.`,
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature,
-        response_format: { type: 'json_object' },
-      }),
+/**
+ * Normalise et valide la recette retournée par l'AI
+ * @param {Object} recipe - Recette brute
+ * @param {string} language - Langue de sortie
+ * @returns {Object} Recette normalisée
+ */
+function normalizeRecipe(recipe, language) {
+  if (!recipe || typeof recipe !== 'object') {
+    throw new Error('Réponse JSON invalide');
+  }
+
+  // Vérifier si l'AI a détecté que ce n'est pas une recette
+  if (recipe.error === 'NOT_RECIPE') {
+    console.warn('⚠️ [AI] Le contenu n\'est pas une recette culinaire');
+    console.log('📝 [AI] Message:', recipe.message);
+
+    const notRecipeError = new Error(
+      recipe.message ||
+        (language === 'en'
+          ? 'This link does not contain a recipe or is not a cooking video.'
+          : 'Ce lien ne contient pas de recette ou n\'est pas une vidéo culinaire.')
+    );
+    notRecipeError.code = 'NOT_RECIPE';
+    notRecipeError.userMessage = recipe.message;
+    throw notRecipeError;
+  }
+
+  // Normaliser diet_type en tableau
+  if (!Array.isArray(recipe.diet_type)) {
+    recipe.diet_type = recipe.diet_type ? [recipe.diet_type].filter(Boolean) : [];
+  }
+
+  // S'assurer que les champs optionnels existent
+  recipe.cuisine_origin = recipe.cuisine_origin || null;
+  recipe.meal_type = recipe.meal_type || null;
+
+  return recipe;
+}
+
+/**
+ * Analyse une transcription de recette avec AI
+ * @param {string} transcription - Transcription textuelle de la vidéo
+ * @param {Object} options - Options d'analyse
+ * @param {string} options.description - Description supplémentaire (ex: description TikTok)
+ * @param {string} options.language - Langue de sortie ('fr' ou 'en', défaut: 'fr')
+ * @param {number} options.temperature - Température du modèle (défaut: 0.3)
+ * @returns {Promise<Object>} Recette structurée avec ingrédients, étapes, macros, etc.
+ */
+export async function analyzeRecipe(transcription, options = {}) {
+  const {
+    description = null,
+    language = 'fr',
+    temperature = 0.3,
+  } = options;
+
+  // Obtenir le provider et le modèle configurés
+  const provider = getProvider();
+  const model = getModel(provider);
+
+  console.log('🤖 [AI] Début de l\'analyse de la recette...');
+  console.log(`🔌 [AI] Provider: ${provider.name}, Modèle: ${model}`);
+  console.log('🌐 [AI] Langue demandée:', language);
+  console.log('📊 [AI] Transcription:', transcription.length, 'caractères');
+
+  if (description) {
+    console.log('📝 [AI] Description supplémentaire:', description.substring(0, 100) + '...');
+  }
+
+  // Construire les prompts
+  const { systemPrompt, userPrompt } = buildRecipePrompt(transcription, description, language);
+
+  try {
+    // Appeler le provider AI
+    const recipe = await provider.generateCompletion({
+      systemPrompt,
+      userPrompt,
+      model,
+      temperature,
+      jsonMode: true,
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || `Erreur API GPT: ${response.status}`);
-    }
+    console.log('📄 [AI] Réponse reçue, validation...');
+    console.log(recipe);
 
-    const result = await response.json();
-    const content = result.choices[0]?.message?.content;
-    console.log(content);
+    // Normaliser et valider la recette
+    const normalizedRecipe = normalizeRecipe(recipe, language);
 
-    if (!content) {
-      console.error('❌ [GPT] Pas de contenu dans la réponse:', JSON.stringify(result, null, 2));
-      throw new Error('Aucune réponse retournée par GPT');
-    }
+    console.log('✅ [AI] Analyse réussie!');
+    console.log('📋 [AI] Recette:', normalizedRecipe.title);
+    console.log('🥕 [AI] Ingrédients:', normalizedRecipe.ingredients?.length || 0);
+    console.log('📝 [AI] Étapes:', normalizedRecipe.steps?.length || 0);
 
-    console.log('📄 [GPT] Réponse reçue, parsing JSON...');
-
-    // Parser le JSON
-    try {
-      const recipe = JSON.parse(content);
-
-      if (!recipe || typeof recipe !== 'object') {
-        throw new Error('Réponse JSON invalide de GPT');
-      }
-
-      // Vérifier si GPT a détecté que ce n'est pas une recette
-      if (recipe.error === 'NOT_RECIPE') {
-        console.warn('⚠️ [GPT] Le contenu n\'est pas une recette culinaire');
-        console.log('📝 [GPT] Message:', recipe.message);
-
-        // Créer une erreur spécifique pour ce cas
-        const notRecipeError = new Error(recipe.message || 'Ce lien ne contient pas de recette ou n\'est pas une vidéo culinaire.');
-        notRecipeError.code = 'NOT_RECIPE';
-        notRecipeError.userMessage = recipe.message;
-        throw notRecipeError;
-      }
-
-      // Normaliser diet_type en tableau
-      if (!Array.isArray(recipe.diet_type)) {
-        recipe.diet_type = recipe.diet_type
-          ? [recipe.diet_type].filter(Boolean)
-          : [];
-      }
-
-      // S'assurer que les champs optionnels existent
-      recipe.cuisine_origin = recipe.cuisine_origin || null;
-      recipe.meal_type = recipe.meal_type || null;
-
-      console.log('✅ [GPT] Analyse réussie!');
-      console.log('📋 [GPT] Recette:', recipe.title);
-      console.log('🥕 [GPT] Ingrédients:', recipe.ingredients?.length || 0);
-      console.log('📝 [GPT] Étapes:', recipe.steps?.length || 0);
-
-      return recipe;
-    } catch (parseError) {
-      // Si c'est notre erreur NOT_RECIPE, la relancer telle quelle
-      if (parseError.code === 'NOT_RECIPE') {
-        throw parseError;
-      }
-
-      // Sinon, c'est une erreur de parsing JSON
-      console.error('❌ [GPT] Erreur de parsing JSON:', parseError.message);
-      console.error('📄 [GPT] Contenu reçu:', content.substring(0, 500));
-      throw new Error('Réponse JSON invalide de GPT');
-    }
+    return normalizedRecipe;
   } catch (error) {
-    console.error('❌ [GPT] Erreur dans l\'analyse:', error.message);
+    // Relancer les erreurs NOT_RECIPE telles quelles
+    if (error.code === 'NOT_RECIPE') {
+      throw error;
+    }
+
+    console.error('❌ [AI] Erreur dans l\'analyse:', error.message);
     throw error;
   }
 }

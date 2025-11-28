@@ -557,7 +557,7 @@ export async function getExistingRecipeByUrl(userId, sourceUrl) {
   try {
     // Normaliser l'URL (enlever les query params qui peuvent varier)
     const normalizedUrl = sourceUrl.split('?')[0]; // Garder seulement l'URL de base
-    
+
     const { data: recipes, error } = await supabase
       .from('recipes')
       .select('id, title, created_at')
@@ -580,6 +580,136 @@ export async function getExistingRecipeByUrl(userId, sourceUrl) {
   } catch (error) {
     console.error('❌ [Database] Erreur lors de la vérification:', error);
     return null;
+  }
+}
+
+/**
+ * Cherche une recette par URL dans toute la base (tous utilisateurs)
+ * @param {string} sourceUrl - URL source de la vidéo
+ * @returns {Promise<Object | null>} - Recette existante avec user_id ou null
+ */
+export async function findRecipeByUrlGlobal(sourceUrl) {
+  try {
+    const normalizedUrl = sourceUrl.split('?')[0];
+
+    console.log('🔍 [Database] Recherche globale de recette pour URL:', normalizedUrl);
+
+    const { data: recipes, error } = await supabase
+      .from('recipes')
+      .select('id, user_id, title, created_at')
+      .like('source_url', `${normalizedUrl}%`)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error('❌ [Database] Erreur recherche globale:', error);
+      return null;
+    }
+
+    if (recipes && recipes.length > 0) {
+      console.log('✅ [Database] Recette trouvée globalement:', recipes[0].id, '(user:', recipes[0].user_id.substring(0, 8) + '...)');
+      return recipes[0];
+    }
+
+    console.log('ℹ️  [Database] Aucune recette trouvée pour cette URL');
+    return null;
+  } catch (error) {
+    console.error('❌ [Database] Erreur recherche globale:', error);
+    return null;
+  }
+}
+
+/**
+ * Duplique une recette existante pour un nouvel utilisateur
+ * Copie la recette, les ingrédients et les étapes
+ * @param {string} originalRecipeId - ID de la recette originale
+ * @param {string} newUserId - ID du nouvel utilisateur
+ * @returns {Promise<Object>} - Nouvelle recette dupliquée
+ */
+export async function duplicateRecipeForUser(originalRecipeId, newUserId) {
+  console.log('📋 [Database] Duplication de recette', originalRecipeId, 'pour user', newUserId.substring(0, 8) + '...');
+
+  try {
+    // 1. Récupérer la recette originale complète
+    const originalRecipe = await getRecipeFromDatabase(originalRecipeId);
+
+    if (!originalRecipe) {
+      throw new Error('Recette originale introuvable');
+    }
+
+    // 2. Créer la nouvelle recette (sans id, created_at, updated_at)
+    const {
+      id: _id,
+      created_at: _createdAt,
+      updated_at: _updatedAt,
+      user_id: _originalUserId,
+      ingredients: originalIngredients,
+      steps: originalSteps,
+      ...recipeData
+    } = originalRecipe;
+
+    const { data: newRecipe, error: recipeError } = await supabase
+      .from('recipes')
+      .insert({
+        ...recipeData,
+        user_id: newUserId,
+      })
+      .select()
+      .single();
+
+    if (recipeError) {
+      console.error('❌ [Database] Erreur création recette dupliquée:', recipeError);
+      throw new Error(`Erreur duplication recette: ${recipeError.message}`);
+    }
+
+    console.log('✅ [Database] Recette dupliquée créée:', newRecipe.id);
+
+    // 3. Dupliquer les ingrédients
+    if (originalIngredients && originalIngredients.length > 0) {
+      const newIngredients = originalIngredients.map(({ id: _ingId, recipe_id: _recipeId, created_at: _ca, ...ing }) => ({
+        ...ing,
+        recipe_id: newRecipe.id,
+      }));
+
+      const { error: ingredientsError } = await supabase
+        .from('ingredients')
+        .insert(newIngredients);
+
+      if (ingredientsError) {
+        console.error('❌ [Database] Erreur duplication ingrédients:', ingredientsError);
+        // Ne pas échouer complètement, la recette est créée
+      } else {
+        console.log('✅ [Database]', newIngredients.length, 'ingrédients dupliqués');
+      }
+    }
+
+    // 4. Dupliquer les étapes
+    if (originalSteps && originalSteps.length > 0) {
+      const newSteps = originalSteps.map(({ id: _stepId, recipe_id: _recipeId, created_at: _ca, ...step }) => ({
+        ...step,
+        recipe_id: newRecipe.id,
+      }));
+
+      const { error: stepsError } = await supabase
+        .from('steps')
+        .insert(newSteps);
+
+      if (stepsError) {
+        console.error('❌ [Database] Erreur duplication étapes:', stepsError);
+        // Ne pas échouer complètement, la recette est créée
+      } else {
+        console.log('✅ [Database]', newSteps.length, 'étapes dupliquées');
+      }
+    }
+
+    console.log('✅ [Database] Duplication complète réussie!');
+
+    // Retourner la recette complète avec ingrédients et étapes
+    return await getRecipeFromDatabase(newRecipe.id);
+
+  } catch (error) {
+    console.error('❌ [Database] Erreur lors de la duplication:', error);
+    throw error;
   }
 }
 

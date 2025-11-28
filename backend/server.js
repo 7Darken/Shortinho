@@ -15,6 +15,9 @@ import {
   analyzeRecipeFromVideo,
   cleanupFile,
 } from './services/analyzer.js';
+import { generateRecipe } from './services/ai/recipeGenerator.js';
+import { generateRecipeImage } from './services/ai/imageGenerator.js';
+import { MEAL_TYPES, DIET_TYPES } from './constants/RecipesCategories.js';
 import { authenticateToken } from './middlewares/auth.js';
 import {
   saveRecipeToDatabase,
@@ -23,6 +26,8 @@ import {
   checkUserCanGenerateRecipe,
   decrementFreeGenerations,
   getExistingRecipeByUrl,
+  findRecipeByUrlGlobal,
+  duplicateRecipeForUser,
 } from './services/database.js';
 import { getUserStats } from './services/userStats.js';
 
@@ -112,39 +117,73 @@ app.post('/analyze', authenticateToken, async (req, res) => {
   }
 
   // ⚠️  VÉRIFIER SI UNE RECETTE EXISTE DÉJÀ POUR CETTE URL
-  // Éviter de relancer une analyse pour une recette déjà générée
+  // 1. D'abord vérifier si l'utilisateur a déjà cette recette
   console.log('🔍 [Server] Vérification de recette existante pour URL:', normalizedUrl);
-  const existingRecipe = await getExistingRecipeByUrl(userId, tiktokUrl);
-  if (existingRecipe) {
-    console.warn('⚠️  [Server] Recette déjà existante pour cette URL');
-    console.log('📊 [Server] Recette ID:', existingRecipe.id);
-    console.log('📊 [Server] Recette titre:', existingRecipe.title);
-    console.log('📊 [Server] Créée le:', existingRecipe.created_at);
-    
-    // Récupérer la recette complète
-    const fullRecipe = await getRecipeFromDatabase(existingRecipe.id);
-    
-    // Préparer la réponse
-    const responseData = {
+  const userExistingRecipe = await getExistingRecipeByUrl(userId, tiktokUrl);
+  if (userExistingRecipe) {
+    console.log('✅ [Server] L\'utilisateur a déjà cette recette');
+    console.log('📊 [Server] Recette ID:', userExistingRecipe.id);
+    console.log('📊 [Server] Recette titre:', userExistingRecipe.title);
+
+    const fullRecipe = await getRecipeFromDatabase(userExistingRecipe.id);
+
+    res.status(200).json({
       success: true,
       recipe: fullRecipe,
       user_id: userId,
-      alreadyExists: true, // Flag pour indiquer que c'était une recette existante
-    };
-    
-    console.log('📤 [Server] Envoi de la recette existante au frontend...');
-    console.log('📊 [Server] Réponse:', {
-      success: responseData.success,
-      recipeId: responseData.recipe?.id,
-      recipeTitle: responseData.recipe?.title,
-      hasIngredients: !!responseData.recipe?.ingredients?.length,
-      hasSteps: !!responseData.recipe?.steps?.length,
-      alreadyExists: responseData.alreadyExists,
+      alreadyExists: true,
     });
-    
-    res.status(200).json(responseData);
     console.log('✅ [Server] Recette existante envoyée avec succès');
-    return; // Important : return pour éviter de continuer l'exécution
+    return;
+  }
+
+  // 2. Vérifier si un autre utilisateur a déjà analysé cette URL
+  const globalRecipe = await findRecipeByUrlGlobal(tiktokUrl);
+  if (globalRecipe) {
+    console.log('🔄 [Server] Recette trouvée chez un autre utilisateur, duplication...');
+    console.log('📊 [Server] Recette originale ID:', globalRecipe.id);
+    console.log('📊 [Server] Propriétaire original:', globalRecipe.user_id.substring(0, 8) + '...');
+
+    try {
+      // Vérifier les droits de génération avant de dupliquer
+      const { canGenerate, isPremium, freeGenerationsRemaining } = await checkUserCanGenerateRecipe(userId);
+
+      if (!canGenerate) {
+        console.warn('⛔ [Server] Duplication refusée - Limite de générations atteinte');
+        return res.status(403).json({
+          success: false,
+          error: 'PREMIUM_REQUIRED',
+          message: 'Limite de générations gratuites atteinte. Passez à Oshii Premium pour continuer.',
+          isPremium,
+          freeGenerationsRemaining,
+        });
+      }
+
+      // Dupliquer la recette pour cet utilisateur
+      const duplicatedRecipe = await duplicateRecipeForUser(globalRecipe.id, userId);
+
+      // Décrémenter le compteur si non premium
+      if (!isPremium) {
+        console.log('📉 [Server] Décrémentation du compteur de générations (duplication)...');
+        await decrementFreeGenerations(userId);
+      }
+
+      console.log('✅ [Server] Recette dupliquée avec succès!');
+      console.log('📊 [Server] Nouvelle recette ID:', duplicatedRecipe.id);
+
+      res.status(200).json({
+        success: true,
+        recipe: duplicatedRecipe,
+        user_id: userId,
+        alreadyExists: true,
+        duplicated: true, // Flag pour indiquer que c'est une duplication
+      });
+      console.log('✅ [Server] Recette dupliquée envoyée avec succès');
+      return;
+    } catch (duplicateError) {
+      // Si la duplication échoue, on continue avec l'analyse normale
+      console.warn('⚠️  [Server] Échec de la duplication, analyse normale:', duplicateError.message);
+    }
   }
 
   // Marquer l'analyse comme en cours (avec URL normalisée)
@@ -280,6 +319,161 @@ app.post('/analyze', authenticateToken, async (req, res) => {
 });
 
 /**
+ * Endpoint pour générer une recette basée sur les préférences
+ * POST /generate
+ * Headers: { "Authorization": "Bearer JWT_TOKEN" }
+ * Body: {
+ *   "mealType": "déjeuner",
+ *   "dietTypes": ["végétarien", "sans gluten"],
+ *   "equipment": ["four", "poêle"],
+ *   "ingredients": ["poulet", "tomates", "oignons"],
+ *   "language": "fr"
+ * }
+ */
+app.post('/generate', authenticateToken, async (req, res) => {
+  const { mealType, dietTypes, equipment, ingredients, language = 'fr' } = req.body;
+  const userId = req.user.id;
+
+  console.log('\n🍳 Nouvelle génération de recette demandée');
+  console.log('👤 [User]', req.user.email || req.user.id);
+  console.log('🌐 [Language]', language);
+
+  // Validation du language
+  if (language && !['fr', 'en'].includes(language)) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_LANGUAGE',
+      message: 'La langue doit être "fr" ou "en"',
+    });
+  }
+
+  // Validation du mealType si fourni
+  if (mealType && !MEAL_TYPES.includes(mealType)) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_MEAL_TYPE',
+      message: `Type de repas invalide. Valeurs acceptées: ${MEAL_TYPES.join(', ')}`,
+    });
+  }
+
+  // Validation des dietTypes si fournis
+  if (dietTypes && Array.isArray(dietTypes)) {
+    const invalidDietTypes = dietTypes.filter(dt => !DIET_TYPES.includes(dt));
+    if (invalidDietTypes.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_DIET_TYPES',
+        message: `Types de régime invalides: ${invalidDietTypes.join(', ')}. Valeurs acceptées: ${DIET_TYPES.join(', ')}`,
+      });
+    }
+  }
+
+  // Validation des arrays
+  if (equipment && !Array.isArray(equipment)) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_EQUIPMENT',
+      message: 'Le champ "equipment" doit être un tableau',
+    });
+  }
+
+  if (ingredients && !Array.isArray(ingredients)) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_INGREDIENTS',
+      message: 'Le champ "ingredients" doit être un tableau',
+    });
+  }
+
+  try {
+    // Vérifier les droits de génération
+    const { canGenerate, isPremium, freeGenerationsRemaining } = await checkUserCanGenerateRecipe(userId);
+
+    if (!canGenerate) {
+      console.warn('⛔ [Server] Génération refusée - Limite de générations atteinte');
+      return res.status(403).json({
+        success: false,
+        error: 'PREMIUM_REQUIRED',
+        message: 'Limite de générations gratuites atteinte. Passez à Oshii Premium pour continuer.',
+        isPremium,
+        freeGenerationsRemaining,
+      });
+    }
+
+    console.log('✅ [Server] Vérification OK - Démarrage de la génération');
+    console.log('💎 [Server] Premium:', isPremium, '| Générations restantes:', freeGenerationsRemaining);
+
+    // Générer la recette avec l'AI
+    const recipe = await generateRecipe(
+      {
+        mealType,
+        dietTypes: dietTypes || [],
+        equipment: equipment || [],
+        ingredients: ingredients || [],
+      },
+      { language }
+    );
+
+    // Générer l'image du plat
+    console.log('\n🎨 GÉNÉRATION IMAGE: Création de l\'image du plat...');
+    const generatedImageUrl = await generateRecipeImage(recipe, { language });
+
+    // Sauvegarder dans Supabase
+    console.log('\n💾 SAUVEGARDE: Enregistrement dans Supabase...');
+    const savedRecipe = await saveRecipeToDatabase({
+      userId,
+      title: recipe.title,
+      servings: recipe.servings,
+      prepTime: recipe.prep_time,
+      cookTime: recipe.cook_time,
+      totalTime: recipe.total_time,
+      sourceUrl: null, // Pas d'URL source pour les recettes générées
+      platform: 'generated', // Marquer comme recette générée
+      thumbnailUrl: generatedImageUrl, // Image générée par AI
+      ingredients: recipe.ingredients,
+      steps: recipe.steps,
+      equipment: recipe.equipment,
+      nutrition: recipe.nutrition,
+      generationMode: isPremium ? 'premium' : 'free',
+      cuisine_origin: recipe.cuisine_origin,
+      meal_type: recipe.meal_type,
+      diet_type: recipe.diet_type,
+      language,
+    });
+    console.log('✅ Sauvegarde réussie!');
+
+    // Récupérer la recette complète
+    const fullRecipe = await getRecipeFromDatabase(savedRecipe.id);
+
+    // Décrémenter le compteur si non premium
+    if (!isPremium) {
+      console.log('📉 [Server] Décrémentation du compteur de générations...');
+      await decrementFreeGenerations(userId);
+    } else {
+      console.log('💎 [Server] Utilisateur premium - Pas de décrémentation');
+    }
+
+    console.log('\n🎉 Génération terminée avec succès!\n');
+
+    res.status(200).json({
+      success: true,
+      recipe: fullRecipe,
+      user_id: userId,
+      generated: true, // Flag pour indiquer que c'est une recette générée
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur lors de la génération:', error.message);
+
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Une erreur est survenue lors de la génération de la recette',
+    });
+  }
+});
+
+/**
  * Endpoint pour supprimer le compte utilisateur
  * DELETE /account
  * Headers: { "Authorization": "Bearer JWT_TOKEN" }
@@ -358,7 +552,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('╚════════════════════════════════════════╝');
   console.log(`\n🚀 Serveur démarré sur http://localhost:${PORT}`);
   console.log('📡 Endpoints disponibles:');
-  console.log('   POST   /analyze     - Analyser une recette TikTok (🔒 Protégé)');
+  console.log('   POST   /analyze     - Analyser une recette vidéo (🔒 Protégé)');
+  console.log('   POST   /generate    - Générer une recette par préférences (🔒 Protégé)');
   console.log('   GET    /user/stats  - Statistiques utilisateur (🔒 Protégé)');
   console.log('   DELETE /account     - Supprimer le compte utilisateur (🔒 Protégé)');
   console.log('   GET    /health      - Vérifier l\'état de l\'API');

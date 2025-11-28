@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 6. **Metadata Extraction**: Platform-specific metadata retrieval (title, author, thumbnailUrl)
 7. **Audio Extraction**: Platform-specific audio extraction (yt-dlp)
 8. **Transcription**: OpenAI Whisper API transcribes audio to text
-9. **Recipe Analysis**: GPT-4o-mini analyzes transcription + metadata to extract structured recipe
+9. **Recipe Analysis**: AI provider (OpenAI/Gemini) analyzes transcription + metadata to extract structured recipe
 10. **Thumbnail Upload**: Download thumbnail from metadata.thumbnailUrl and upload to Supabase Storage in platform-specific folder
 11. **Database Persistence**: Save recipe, ingredients, steps with intelligent food_items matching
 12. **Cleanup**: Automatic cleanup of temporary files
@@ -36,7 +36,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **services/ai/** - AI services (platform-agnostic)
   - **transcription.js**: Whisper API transcription service
-  - **recipeAnalyzer.js**: GPT-4o-mini recipe analysis service
+  - **recipeAnalyzer.js**: Multi-provider recipe analysis service
+  - **recipeGenerator.js**: Recipe generation from user preferences
+  - **imageGenerator.js**: AI-powered dish image generation
+  - **providers/**: Modular AI provider architecture
+    - **base/AIProvider.js**: Abstract base class for text AI providers
+    - **base/ImageProvider.js**: Abstract base class for image AI providers
+    - **openai/OpenAIProvider.js**: OpenAI GPT implementation
+    - **openai/OpenAIImageProvider.js**: OpenAI DALL-E implementation
+    - **gemini/GeminiProvider.js**: Google Gemini implementation
+    - **gemini/GeminiImageProvider.js**: Google Imagen implementation
+    - **AIProviderFactory.js**: Factory for text provider selection via env vars
+    - **ImageProviderFactory.js**: Factory for image provider selection via env vars
 
 - **services/analyzer.js**: Main orchestrator - coordinates platform, AI, and cleanup
 - **services/database.js**: Supabase operations with intelligent ingredient matching using fuzzy similarity scoring (normalizeName + similarityScore functions)
@@ -131,12 +142,25 @@ curl -X POST http://localhost:3000/analyze \
 ## Environment Variables
 
 Required in `.env` file:
-- `OPENAI_API_KEY`: OpenAI API key for Whisper + GPT
+- `OPENAI_API_KEY`: OpenAI API key for Whisper transcription (always required)
 - `SUPABASE_URL`: Supabase project URL
 - `SUPABASE_JWT_SECRET`: For JWT token verification
 - `SUPABASE_SERVICE_KEY`: Service role key (bypasses RLS)
 - `SUPABASE_ANON_KEY`: Anonymous key (optional, for client use)
 - `PORT`: Server port (default: 3000)
+
+**AI Provider Configuration** (for recipe analysis):
+- `AI_PROVIDER`: AI provider to use ('openai' or 'gemini', default: 'openai')
+- `AI_MODEL`: Model to use (optional, uses provider default if not set)
+  - OpenAI default: `gpt-4o-mini`
+  - Gemini default: `gemini-2.0-flash`
+- `GEMINI_API_KEY`: Required if using Gemini provider
+
+**Image Generation Configuration**:
+- `IMAGE_PROVIDER`: Image provider to use ('openai' or 'gemini', default: uses AI_PROVIDER)
+- `IMAGE_MODEL`: Image model to use (optional, uses provider default if not set)
+  - OpenAI default: `dall-e-3`
+  - Gemini default: `imagen-3.0-generate-002`
 
 ## System Dependencies
 
@@ -159,9 +183,43 @@ pip install yt-dlp
 
 ## API Endpoints
 
-- `POST /analyze` (protected): Analyze TikTok recipe, returns structured recipe data
+- `POST /analyze` (protected): Analyze video recipe (TikTok, YouTube, Instagram), returns structured recipe data
+- `POST /generate` (protected): Generate recipe from user preferences (mealType, dietTypes, equipment, ingredients)
+- `GET /user/stats` (protected): Get user statistics
 - `DELETE /account` (protected): Delete user account and all associated data
 - `GET /health` (public): Server health check
+
+### POST /generate - Generate Recipe from Preferences
+
+Generate a real, existing recipe based on user preferences.
+
+**Request Body:**
+```json
+{
+  "mealType": "déjeuner",
+  "dietTypes": ["végétarien", "sans gluten"],
+  "equipment": ["four", "poêle"],
+  "ingredients": ["poulet", "tomates", "oignons"],
+  "language": "fr"
+}
+```
+
+**Parameters:**
+- `mealType` (optional): Type of meal from MEAL_TYPES (petit-déjeuner, déjeuner, dîner, collation, dessert, entrée, autre)
+- `dietTypes` (optional): Array of dietary restrictions from DIET_TYPES
+- `equipment` (optional): Array of available kitchen equipment
+- `ingredients` (optional): Array of available ingredients (food_items names)
+- `language` (optional): Output language ('fr' or 'en', default: 'fr')
+
+**Response:** Same structure as `/analyze` endpoint with `generated: true` flag
+
+**Notes:**
+- The AI generates REAL, EXISTING recipes (not fictional)
+- Incompatible ingredients are automatically filtered out
+- Missing essential ingredients may be added by the AI
+- Respects dietary restrictions strictly
+- Platform is set to 'generated' for these recipes
+- An AI-generated image of the dish is created and stored in Supabase Storage (`generated/` folder)
 
 ## Adding New Platforms
 
@@ -208,6 +266,56 @@ The orchestrator (`analyzeRecipeFromVideo`) automatically detects and uses the n
 
 **See `services/README.md` for detailed platform development guide.**
 
+## Adding New AI Providers
+
+The AI provider architecture is designed for easy extensibility. To add a new provider (e.g., Anthropic Claude, Mistral):
+
+### 1. Create Provider Implementation
+
+Create `services/ai/providers/[provider]/[Provider]Provider.js`:
+
+```javascript
+import { AIProvider } from '../base/AIProvider.js';
+
+export class AnthropicProvider extends AIProvider {
+  name = 'anthropic';
+  defaultModel = 'claude-3-haiku-20240307';
+
+  getApiKey() {
+    return process.env.ANTHROPIC_API_KEY;
+  }
+
+  validateCredentials() {
+    if (!this.getApiKey()) {
+      throw new Error('ANTHROPIC_API_KEY non définie');
+    }
+    return true;
+  }
+
+  async generateCompletion(options) {
+    // Implement API call to Anthropic
+  }
+}
+```
+
+### 2. Register in AIProviderFactory
+
+Add to `services/ai/providers/AIProviderFactory.js`:
+
+```javascript
+import { AnthropicProvider } from './anthropic/AnthropicProvider.js';
+
+const PROVIDERS = {
+  openai: OpenAIProvider,
+  gemini: GeminiProvider,
+  anthropic: AnthropicProvider,  // Add here
+};
+```
+
+### 3. Done!
+
+Set `AI_PROVIDER=anthropic` in `.env` to use the new provider.
+
 ## Important Conventions
 
 ### Code Style
@@ -239,5 +347,7 @@ The orchestrator (`analyzeRecipeFromVideo`) automatically detects and uses the n
   - TikTok: `tiktok/tiktok-1699999999-abc123.jpg`
   - YouTube: `youtube/youtube-1699999999-def456.jpg`
   - Instagram: `instagram/instagram-1699999999-ghi789.jpg`
+  - Generated: `generated/generated-recipe-name-1699999999-abc123.png`
 - `uploadThumbnailToStorage(thumbnailUrl, platform)` handles download and upload
 - `getTikTokThumbnail()` is deprecated - use `uploadThumbnailToStorage()` instead
+- For generated recipes, `generateRecipeImage()` creates AI images and uploads to `generated/` folder
