@@ -19,6 +19,8 @@ import { generateRecipe } from './services/ai/recipeGenerator.js';
 import { generateRecipeImage } from './services/ai/imageGenerator.js';
 import { MEAL_TYPES, DIET_TYPES } from './constants/RecipesCategories.js';
 import { authenticateToken } from './middlewares/auth.js';
+import { rateLimiter, strictRateLimiter, getRateLimitStats } from './middlewares/rateLimiter.js';
+import { costProtection, getCostStats } from './middlewares/costProtection.js';
 import {
   saveRecipeToDatabase,
   deleteUserAccount,
@@ -73,8 +75,12 @@ if (!fs.existsSync(AUDIO_DIR)) {
  * POST /analyze
  * Headers: { "Authorization": "Bearer JWT_TOKEN" }
  * Body: { "url": "https://www.tiktok.com/..." }
+ *
+ * Protections:
+ * - Rate limiting: 10 req/min par user, 20 req/min par IP
+ * - Cost protection: limite journalière globale et par utilisateur
  */
-app.post('/analyze', authenticateToken, async (req, res) => {
+app.post('/analyze', authenticateToken, rateLimiter(), costProtection('analyze'), async (req, res) => {
   const tiktokUrl = req.body.url;
   const language = req.body.language || 'fr'; // Langue par défaut: français
   const userId = req.user.id;
@@ -329,8 +335,12 @@ app.post('/analyze', authenticateToken, async (req, res) => {
  *   "ingredients": ["poulet", "tomates", "oignons"],
  *   "language": "fr"
  * }
+ *
+ * Protections:
+ * - Rate limiting STRICT: 5 req/min par user, 10 req/min par IP
+ * - Cost protection: limite journalière globale et par utilisateur
  */
-app.post('/generate', authenticateToken, async (req, res) => {
+app.post('/generate', authenticateToken, strictRateLimiter(), costProtection('generate'), async (req, res) => {
   const { mealType, dietTypes, equipment, ingredients, language = 'fr' } = req.body;
   const userId = req.user.id;
 
@@ -544,6 +554,31 @@ app.get('/health', (req, res) => {
 });
 
 /**
+ * Endpoint pour voir les statistiques de protection (admin)
+ * GET /admin/stats
+ * Protégé par une clé API admin
+ */
+app.get('/admin/stats', (req, res) => {
+  const adminKey = req.headers['x-admin-key'];
+  const expectedKey = process.env.ADMIN_API_KEY;
+
+  if (!expectedKey || adminKey !== expectedKey) {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      message: 'Clé admin invalide',
+    });
+  }
+
+  res.json({
+    success: true,
+    timestamp: new Date().toISOString(),
+    rateLimiting: getRateLimitStats(),
+    costProtection: getCostStats(),
+  });
+});
+
+/**
  * Démarrer le serveur
  */
 app.listen(PORT, '0.0.0.0', () => {
@@ -552,11 +587,12 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('╚════════════════════════════════════════╝');
   console.log(`\n🚀 Serveur démarré sur http://localhost:${PORT}`);
   console.log('📡 Endpoints disponibles:');
-  console.log('   POST   /analyze     - Analyser une recette vidéo (🔒 Protégé)');
-  console.log('   POST   /generate    - Générer une recette par préférences (🔒 Protégé)');
+  console.log('   POST   /analyze     - Analyser une recette vidéo (🔒 Protégé + 🛡️ Rate Limited)');
+  console.log('   POST   /generate    - Générer une recette par préférences (🔒 Protégé + 🛡️ Rate Limited)');
   console.log('   GET    /user/stats  - Statistiques utilisateur (🔒 Protégé)');
   console.log('   DELETE /account     - Supprimer le compte utilisateur (🔒 Protégé)');
   console.log('   GET    /health      - Vérifier l\'état de l\'API');
+  console.log('   GET    /admin/stats - Statistiques de protection (🔑 Admin)');
   console.log('\n✅ Prêt à recevoir des requêtes!\n');
 });
 

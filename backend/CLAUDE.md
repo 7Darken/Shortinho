@@ -162,6 +162,12 @@ Required in `.env` file:
   - OpenAI default: `dall-e-3`
   - Gemini default: `imagen-3.0-generate-002`
 
+**Security & Rate Limiting Configuration**:
+- `ADMIN_API_KEY`: Secret key to access admin stats endpoint (generate a random string)
+- `DAILY_GLOBAL_LIMIT`: Max generations per day globally (default: 500)
+- `DAILY_USER_LIMIT`: Max generations per day per user (default: 50)
+- `HOURLY_GLOBAL_LIMIT`: Max generations per hour globally (default: 100)
+
 ## System Dependencies
 
 **Required**:
