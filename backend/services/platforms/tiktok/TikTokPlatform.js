@@ -68,7 +68,6 @@ export class TikTokPlatform extends Platform {
 
     console.log(`📂 [${this.name}] Dossier de sortie:`, outputDir);
 
-    // Configuration yt-dlp pour extraire seulement l'audio
     const ytdlpArgs = [
       '--extract-audio',
       '--audio-format', 'mp3',
@@ -77,6 +76,7 @@ export class TikTokPlatform extends Platform {
       '--no-warnings',
       '--progress',
       '--console-title',
+      '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       '-o', outputPath,
       url,
     ];
@@ -88,12 +88,23 @@ export class TikTokPlatform extends Platform {
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
+      let stderrOutput = '';
+      ytdlp.stderr.on('data', (data) => {
+        stderrOutput += data.toString();
+      });
+
       await new Promise((resolve, reject) => {
         ytdlp.on('close', (code) => {
           if (code === 0) {
             resolve();
           } else {
-            reject(new Error(`yt-dlp a échoué avec le code ${code}`));
+            console.error(`❌ [${this.name}] Logs d'erreur yt-dlp complets:\n${stderrOutput}`);
+
+            // Extraire la dernière ligne d'erreur significative si possible
+            const errorLines = stderrOutput.split('\n').filter(line => line.includes('ERROR:'));
+            const mainError = errorLines.length > 0 ? errorLines[errorLines.length - 1] : stderrOutput.trim().substring(0, 100);
+
+            reject(new Error(`yt-dlp a échoué avec le code ${code}. Détails: ${mainError}`));
           }
         });
 
