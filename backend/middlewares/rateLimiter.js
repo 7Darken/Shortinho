@@ -20,7 +20,7 @@ const DEFAULT_CONFIG = {
     blockDurationMs: 10 * 60 * 1000,
   },
   global: {
-    maxRequests: 100,
+    maxRequests: 500,
     windowMs: 60 * 1000,
   },
 };
@@ -62,10 +62,10 @@ setInterval(cleanupMemoryStore, 5 * 60 * 1000);
  */
 function getClientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-         req.headers['x-real-ip'] ||
-         req.connection?.remoteAddress ||
-         req.socket?.remoteAddress ||
-         'unknown';
+    req.headers['x-real-ip'] ||
+    req.connection?.remoteAddress ||
+    req.socket?.remoteAddress ||
+    'unknown';
 }
 
 /**
@@ -323,7 +323,7 @@ export function strictRateLimiter() {
       blockDurationMs: 15 * 60 * 1000,
     },
     global: {
-      maxRequests: 50,
+      maxRequests: 200,
       windowMs: 60 * 1000,
     },
   });

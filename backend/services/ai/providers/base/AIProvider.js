@@ -16,7 +16,7 @@ export class AIProvider {
   defaultModel = '';
 
   /**
-   * Génère une complétion à partir d'un prompt
+   * Génère une complétion à partir d'un prompt avec mécanisme de retry
    * @param {Object} options - Options de génération
    * @param {string} options.systemPrompt - Prompt système
    * @param {string} options.userPrompt - Prompt utilisateur
@@ -26,7 +26,48 @@ export class AIProvider {
    * @returns {Promise<Object>} Réponse parsée en JSON
    */
   async generateCompletion(options) {
-    throw new Error(`generateCompletion() doit être implémenté par ${this.name}`);
+    const maxRetries = 3;
+    const baseDelay = 2000; // 2s initiaux
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await this._generateCompletion(options);
+      } catch (error) {
+        const isRetryable = this._isRetryableError(error);
+
+        if (!isRetryable || attempt === maxRetries) {
+          throw error;
+        }
+
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        console.warn(`⚠️ [${this.name.toUpperCase()}] Erreur temporaire (${error.message}). Nouvelle tentative ${attempt}/${maxRetries} dans ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  /**
+   * À implémenter par les classes enfants (appel proprement dit à l'API)
+   */
+  async _generateCompletion(options) {
+    throw new Error(`_generateCompletion() doit être implémenté par ${this.name}`);
+  }
+
+  /**
+   * Détermine si une erreur peut être réessayée
+   * @param {Error} error
+   * @returns {boolean}
+   */
+  _isRetryableError(error) {
+    const errorMsg = error.message?.toLowerCase() || '';
+    return errorMsg.includes('high demand') ||
+      errorMsg.includes('overloaded') ||
+      errorMsg.includes('rate limit') ||
+      errorMsg.includes('too many requests') ||
+      errorMsg.includes('service unavailable') ||
+      errorMsg.includes('temporarily overloaded') ||
+      errorMsg.includes('503') ||
+      errorMsg.includes('429');
   }
 
   /**

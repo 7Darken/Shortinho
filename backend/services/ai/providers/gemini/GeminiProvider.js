@@ -36,7 +36,7 @@ export class GeminiProvider extends AIProvider {
    * @param {boolean} [options.jsonMode=true]
    * @returns {Promise<Object>}
    */
-  async generateCompletion(options) {
+  async _generateCompletion(options) {
     this.validateCredentials();
 
     const {

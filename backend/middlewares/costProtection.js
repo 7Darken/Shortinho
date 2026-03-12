@@ -10,9 +10,9 @@ import { supabase } from '../services/database.js';
  * Configuration des limites de coûts
  */
 const COST_CONFIG = {
-  dailyGlobalLimit: parseInt(process.env.DAILY_GLOBAL_LIMIT) || 500,
-  dailyUserLimit: parseInt(process.env.DAILY_USER_LIMIT) || 50,
-  hourlyGlobalLimit: parseInt(process.env.HOURLY_GLOBAL_LIMIT) || 100,
+  dailyGlobalLimit: parseInt(process.env.DAILY_GLOBAL_LIMIT) || 2000,
+  dailyUserLimit: parseInt(process.env.DAILY_USER_LIMIT) || 100,
+  hourlyGlobalLimit: parseInt(process.env.HOURLY_GLOBAL_LIMIT) || 500,
   alertThreshold: 0.8,
 };
 
