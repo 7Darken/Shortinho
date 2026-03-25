@@ -22,6 +22,7 @@ import { authenticateToken } from './middlewares/auth.js';
 import { rateLimiter, strictRateLimiter, getRateLimitStats } from './middlewares/rateLimiter.js';
 import { costProtection, getCostStats } from './middlewares/costProtection.js';
 import {
+  supabase,
   saveRecipeToDatabase,
   deleteUserAccount,
   getRecipeFromDatabase,
@@ -542,6 +543,56 @@ app.get('/user/stats', authenticateToken, async (req, res) => {
 });
 
 /**
+ * Endpoint pour envoyer un feedback utilisateur
+ * POST /feedback
+ * Headers: { "Authorization": "Bearer JWT_TOKEN" }
+ * Body: { "message": "..." }
+ */
+app.post('/feedback', authenticateToken, rateLimiter(), async (req, res) => {
+  const { message } = req.body;
+  const userId = req.user.id;
+
+  // Validation: message requis et type string
+  if (!message || typeof message !== 'string' || message.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Message requis',
+    });
+  }
+
+  // Validation: longueur max
+  if (message.trim().length > 1000) {
+    return res.status(400).json({
+      success: false,
+      error: 'Message trop long (max 1000 caractères)',
+    });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('feedback')
+      .insert({ user_id: userId, message: message.trim() });
+
+    if (error) {
+      console.error('❌ Erreur insertion feedback:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erreur serveur',
+      });
+    }
+
+    console.log('✅ Feedback enregistré pour user:', userId.substring(0, 8));
+    res.status(201).json({ success: true });
+  } catch (error) {
+    console.error('❌ Erreur feedback:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur',
+    });
+  }
+});
+
+/**
  * Endpoint de santé
  * GET /health
  */
@@ -590,6 +641,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   POST   /analyze     - Analyser une recette vidéo (🔒 Protégé + 🛡️ Rate Limited)');
   console.log('   POST   /generate    - Générer une recette par préférences (🔒 Protégé + 🛡️ Rate Limited)');
   console.log('   GET    /user/stats  - Statistiques utilisateur (🔒 Protégé)');
+  console.log('   POST   /feedback    - Envoyer un feedback (🔒 Protégé + 🛡️ Rate Limited)');
   console.log('   DELETE /account     - Supprimer le compte utilisateur (🔒 Protégé)');
   console.log('   GET    /health      - Vérifier l\'état de l\'API');
   console.log('   GET    /admin/stats - Statistiques de protection (🔑 Admin)');
