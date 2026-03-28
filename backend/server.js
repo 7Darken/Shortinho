@@ -650,12 +650,17 @@ app.post('/admin/sync-premium/:userId', async (req, res) => {
 
     const rcData = await rcResponse.json();
     const entitlements = rcData.subscriber?.entitlements || {};
+    const subscriptions = rcData.subscriber?.subscriptions || {};
+
+    console.log('📦 [RevenueCat API] Entitlements:', JSON.stringify(entitlements, null, 2));
+    console.log('📦 [RevenueCat API] Subscriptions:', JSON.stringify(subscriptions, null, 2));
 
     // Chercher un entitlement actif (pas expiré)
     let isPremium = false;
     let premiumExpiry = null;
     let subscriptionName = null;
 
+    // D'abord checker les entitlements
     for (const [key, entitlement] of Object.entries(entitlements)) {
       const expiresDate = entitlement.expires_date ? new Date(entitlement.expires_date) : null;
       if (!expiresDate || expiresDate > new Date()) {
@@ -666,7 +671,34 @@ app.post('/admin/sync-premium/:userId', async (req, res) => {
       }
     }
 
+    // Si pas trouvé dans entitlements, checker les subscriptions directement
+    if (!isPremium) {
+      for (const [productId, sub] of Object.entries(subscriptions)) {
+        const expiresDate = sub.expires_date ? new Date(sub.expires_date) : null;
+        const unsubDetected = sub.unsubscribe_detected_at;
+        if (expiresDate && expiresDate > new Date()) {
+          isPremium = true;
+          premiumExpiry = sub.expires_date;
+          subscriptionName = productId;
+          break;
+        }
+      }
+    }
+
     console.log(`🔄 [Admin] Sync premium user ${userId}: isPremium=${isPremium}, expiry=${premiumExpiry}`);
+
+    // Ne pas mettre à jour si on veut juste voir les données (dry run avec ?dry=true)
+    if (req.query.dry === 'true') {
+      return res.json({
+        success: true,
+        dryRun: true,
+        userId,
+        isPremium,
+        premiumExpiry,
+        subscriptionName,
+        raw: { entitlements, subscriptions },
+      });
+    }
 
     await updateUserPremiumStatus(userId, {
       isPremium,
@@ -680,6 +712,7 @@ app.post('/admin/sync-premium/:userId', async (req, res) => {
       isPremium,
       premiumExpiry,
       subscriptionName,
+      raw: { entitlements, subscriptions },
     });
   } catch (error) {
     console.error('❌ [Admin] Erreur sync premium:', error.message);
