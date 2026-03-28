@@ -753,7 +753,7 @@ export async function checkUserCanGenerateRecipe(userId) {
     // Récupérer le profil de l'utilisateur
     const { data: profile, error } = await supabase
       .from('profiles')
-      .select('is_premium, free_generations_remaining')
+      .select('is_premium, free_generations_remaining, premium_expiry')
       .eq('id', userId)
       .single();
 
@@ -767,8 +767,28 @@ export async function checkUserCanGenerateRecipe(userId) {
       throw new Error('Profil utilisateur introuvable');
     }
 
-    const isPremium = profile.is_premium === true;
+    let isPremium = profile.is_premium === true;
     const freeGenerationsRemaining = profile.free_generations_remaining || 0;
+
+    // Vérifier si l'abonnement premium a expiré
+    if (isPremium && profile.premium_expiry) {
+      const expiryDate = new Date(profile.premium_expiry);
+      if (expiryDate < new Date()) {
+        console.warn('⚠️  [Database] Abonnement premium expiré le:', profile.premium_expiry);
+        isPremium = false;
+
+        // Mettre à jour le profil en base pour désactiver le premium
+        await supabase
+          .from('profiles')
+          .update({
+            is_premium: false,
+            subscription_name: null,
+          })
+          .eq('id', userId);
+
+        console.log('🔄 [Database] Premium désactivé automatiquement (expiry dépassée)');
+      }
+    }
 
     console.log('💎 [Database] isPremium:', isPremium);
     console.log('📊 [Database] free_generations_remaining:', freeGenerationsRemaining);
@@ -841,6 +861,49 @@ export async function decrementFreeGenerations(userId) {
     // Ne pas throw ici pour ne pas bloquer l'analyse
     // Mais logger clairement pour debug
     console.warn('⚠️  [Database] La décrémentation a échoué mais l\'analyse continue');
+  }
+}
+
+/**
+ * Met à jour le statut premium d'un utilisateur
+ * @param {string} appUserId - ID Supabase de l'utilisateur
+ * @param {Object} options - Options de mise à jour
+ * @param {boolean} options.isPremium - Nouveau statut premium
+ * @param {string|null} options.premiumExpiry - Date d'expiration (ISO string) ou null
+ * @param {string|null} options.subscriptionName - Nom de l'abonnement ou null
+ * @returns {Promise<boolean>} - true si succès
+ */
+export async function updateUserPremiumStatus(appUserId, { isPremium, premiumExpiry = null, subscriptionName = null }) {
+  console.log('🔄 [Database] Mise à jour du statut premium pour:', appUserId);
+  console.log('💎 [Database] isPremium:', isPremium, '| expiry:', premiumExpiry, '| subscription:', subscriptionName);
+
+  try {
+    const updateData = {
+      is_premium: isPremium,
+      premium_expiry: premiumExpiry,
+      subscription_name: subscriptionName,
+    };
+
+    // Ajouter premium_since si activation
+    if (isPremium) {
+      updateData.premium_since = new Date().toISOString();
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update(updateData)
+      .eq('id', appUserId);
+
+    if (error) {
+      console.error('❌ [Database] Erreur mise à jour premium:', error);
+      throw new Error(`Erreur mise à jour premium: ${error.message}`);
+    }
+
+    console.log('✅ [Database] Statut premium mis à jour avec succès');
+    return true;
+  } catch (error) {
+    console.error('❌ [Database] Erreur lors de la mise à jour du statut premium:', error);
+    throw error;
   }
 }
 

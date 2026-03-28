@@ -31,8 +31,10 @@ import {
   getExistingRecipeByUrl,
   findRecipeByUrlGlobal,
   duplicateRecipeForUser,
+  updateUserPremiumStatus,
 } from './services/database.js';
 import { getUserStats } from './services/userStats.js';
+import { handleRevenueCatWebhook } from './webhooks/revenuecat.js';
 
 // Charger les variables d'environnement
 dotenv.config();
@@ -593,6 +595,13 @@ app.post('/feedback', authenticateToken, rateLimiter(), async (req, res) => {
 });
 
 /**
+ * Webhook RevenueCat pour les événements d'abonnement
+ * POST /webhooks/revenuecat
+ * Authentifié par REVENUECAT_WEBHOOK_SECRET (Bearer token)
+ */
+app.post('/webhooks/revenuecat', handleRevenueCatWebhook);
+
+/**
  * Endpoint de santé
  * GET /health
  */
@@ -643,6 +652,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   GET    /user/stats  - Statistiques utilisateur (🔒 Protégé)');
   console.log('   POST   /feedback    - Envoyer un feedback (🔒 Protégé + 🛡️ Rate Limited)');
   console.log('   DELETE /account     - Supprimer le compte utilisateur (🔒 Protégé)');
+  console.log('   POST   /webhooks/revenuecat - Webhook abonnements RevenueCat (🔑 Secret)');
   console.log('   GET    /health      - Vérifier l\'état de l\'API');
   console.log('   GET    /admin/stats - Statistiques de protection (🔑 Admin)');
   console.log('\n✅ Prêt à recevoir des requêtes!\n');
