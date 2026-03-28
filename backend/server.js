@@ -614,6 +614,80 @@ app.get('/health', (req, res) => {
 });
 
 /**
+ * Synchroniser le statut premium d'un utilisateur avec RevenueCat
+ * POST /admin/sync-premium/:userId
+ * Protégé par clé API admin
+ */
+app.post('/admin/sync-premium/:userId', async (req, res) => {
+  const adminKey = req.headers['x-admin-key'];
+  const expectedKey = process.env.ADMIN_API_KEY;
+
+  if (!expectedKey || adminKey !== expectedKey) {
+    return res.status(403).json({ success: false, error: 'Clé admin invalide' });
+  }
+
+  const { userId } = req.params;
+  const rcApiKey = process.env.REVENUECAT_API_KEY;
+
+  if (!rcApiKey) {
+    return res.status(500).json({ success: false, error: 'REVENUECAT_API_KEY non configurée' });
+  }
+
+  try {
+    // Appeler l'API RevenueCat pour récupérer le statut réel
+    const rcResponse = await fetch(`https://api.revenuecat.com/v1/subscribers/${userId}`, {
+      headers: {
+        'Authorization': `Bearer ${rcApiKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!rcResponse.ok) {
+      const errorText = await rcResponse.text();
+      console.error('❌ [RevenueCat API] Erreur:', rcResponse.status, errorText);
+      return res.status(rcResponse.status).json({ success: false, error: `RevenueCat API error: ${rcResponse.status}` });
+    }
+
+    const rcData = await rcResponse.json();
+    const entitlements = rcData.subscriber?.entitlements || {};
+
+    // Chercher un entitlement actif (pas expiré)
+    let isPremium = false;
+    let premiumExpiry = null;
+    let subscriptionName = null;
+
+    for (const [key, entitlement] of Object.entries(entitlements)) {
+      const expiresDate = entitlement.expires_date ? new Date(entitlement.expires_date) : null;
+      if (!expiresDate || expiresDate > new Date()) {
+        isPremium = true;
+        premiumExpiry = entitlement.expires_date || null;
+        subscriptionName = entitlement.product_identifier || key;
+        break;
+      }
+    }
+
+    console.log(`🔄 [Admin] Sync premium user ${userId}: isPremium=${isPremium}, expiry=${premiumExpiry}`);
+
+    await updateUserPremiumStatus(userId, {
+      isPremium,
+      premiumExpiry,
+      subscriptionName,
+    });
+
+    return res.json({
+      success: true,
+      userId,
+      isPremium,
+      premiumExpiry,
+      subscriptionName,
+    });
+  } catch (error) {
+    console.error('❌ [Admin] Erreur sync premium:', error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * Endpoint pour voir les statistiques de protection (admin)
  * GET /admin/stats
  * Protégé par une clé API admin
@@ -654,6 +728,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   DELETE /account     - Supprimer le compte utilisateur (🔒 Protégé)');
   console.log('   POST   /webhooks/revenuecat - Webhook abonnements RevenueCat (🔑 Secret)');
   console.log('   GET    /health      - Vérifier l\'état de l\'API');
+  console.log('   POST   /admin/sync-premium/:userId - Sync premium avec RevenueCat (🔑 Admin)');
   console.log('   GET    /admin/stats - Statistiques de protection (🔑 Admin)');
   console.log('\n✅ Prêt à recevoir des requêtes!\n');
 });
