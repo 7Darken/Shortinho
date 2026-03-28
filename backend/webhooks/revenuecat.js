@@ -3,7 +3,8 @@
  * Documentation: https://www.revenuecat.com/docs/integrations/webhooks
  */
 
-import { updateUserPremiumStatus } from '../services/database.js';
+import { updateUserPremiumStatus, getUserEmail } from '../services/database.js';
+import { notifySubscriptionEvent } from '../services/telegram.js';
 
 /**
  * Types d'événements RevenueCat qui activent le premium
@@ -73,6 +74,9 @@ export async function handleRevenueCatWebhook(req, res) {
       return res.status(400).json({ error: 'Missing app_user_id' });
     }
 
+    // Récupérer l'email du user pour les notifications
+    const email = await getUserEmail(appUserId);
+
     // Événements qui activent le premium
     if (PREMIUM_ACTIVE_EVENTS.includes(eventType)) {
       console.log('✅ [RevenueCat] Activation premium pour:', appUserId);
@@ -81,6 +85,7 @@ export async function handleRevenueCatWebhook(req, res) {
         premiumExpiry: expirationDate,
         subscriptionName: productId || 'Oshii Pro',
       });
+      await notifySubscriptionEvent({ email, productId, eventType, expirationDate });
     }
 
     // Événements qui désactivent le premium
@@ -91,18 +96,18 @@ export async function handleRevenueCatWebhook(req, res) {
         premiumExpiry: null,
         subscriptionName: null,
       });
+      await notifySubscriptionEvent({ email, productId, eventType, expirationDate });
     }
 
     // Cancellation : l'user a cancel mais garde l'accès jusqu'à l'expiration
     else if (eventType === 'CANCELLATION') {
       console.log('⚠️  [RevenueCat] Annulation détectée - premium reste actif jusqu\'à:', expirationDate);
-      // On garde is_premium = true mais on met à jour l'expiry
-      // Le check dans checkUserCanGenerateRecipe() désactivera automatiquement à l'expiration
       await updateUserPremiumStatus(appUserId, {
         isPremium: true,
         premiumExpiry: expirationDate,
         subscriptionName: productId || 'Oshii Pro',
       });
+      await notifySubscriptionEvent({ email, productId, eventType, expirationDate });
     }
 
     // Événements informatifs

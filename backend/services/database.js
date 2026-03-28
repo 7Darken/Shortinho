@@ -908,6 +908,25 @@ export async function updateUserPremiumStatus(appUserId, { isPremium, premiumExp
 }
 
 /**
+ * Récupère l'email d'un utilisateur via Supabase Auth
+ * @param {string} userId - UUID de l'utilisateur
+ * @returns {Promise<string|null>} - Email ou null
+ */
+export async function getUserEmail(userId) {
+  try {
+    const { data, error } = await supabase.auth.admin.getUserById(userId);
+    if (error || !data?.user?.email) {
+      console.warn('⚠️  [Database] Email non trouvé pour:', userId);
+      return null;
+    }
+    return data.user.email;
+  } catch (error) {
+    console.error('❌ [Database] Erreur récupération email:', error.message);
+    return null;
+  }
+}
+
+/**
  * Supprimer le compte utilisateur (toutes les données associées seront supprimées via CASCADE)
  * @param {string} userId - ID de l'utilisateur
  * @returns {Promise<boolean>} - true si succès, false sinon
