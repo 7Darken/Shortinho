@@ -614,6 +614,30 @@ app.get('/health', (req, res) => {
 });
 
 /**
+ * Test notification Telegram
+ * GET /admin/test-telegram
+ * Protégé par clé API admin
+ */
+app.get('/admin/test-telegram', async (req, res) => {
+  const adminKey = req.headers['x-admin-key'];
+  const expectedKey = process.env.ADMIN_API_KEY;
+
+  if (!expectedKey || adminKey !== expectedKey) {
+    return res.status(403).json({ success: false, error: 'Clé admin invalide' });
+  }
+
+  const { notifySubscriptionEvent } = await import('./services/telegram.js');
+  await notifySubscriptionEvent({
+    email: 'test@oshii.app',
+    productId: 'oshii_pro_monthly',
+    eventType: 'INITIAL_PURCHASE',
+    expirationDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+  });
+
+  return res.json({ success: true, message: 'Notification test envoyée' });
+});
+
+/**
  * Synchroniser le statut premium d'un utilisateur avec RevenueCat
  * POST /admin/sync-premium/:userId
  * Protégé par clé API admin
